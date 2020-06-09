@@ -1,0 +1,2 @@
+include( XrdPfc )
+include( XrdOssIntegrity )
