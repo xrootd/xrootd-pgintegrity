@@ -219,6 +219,7 @@ int IOFileBlock::initLocalStat()
          if (m_info.Read(m_info_file, path))
          {
             tmpStat.st_size = m_info.GetFileSize();
+            m_info.WriteIOStatAttach();
             TRACEIO(Info, "IOFileBlock::initCachedStat successfuly read size from existing info file = " << tmpStat.st_size);
             res = 0;
          }
@@ -248,7 +249,7 @@ int IOFileBlock::initLocalStat()
                // The info file is used to get file size on defer open
                // don't initalize buffer, it does not hold useful information in this case
                m_info.SetBufferSize(m_cache.RefConfiguration().m_bufferSize);
-               m_info.DisableDownloadStatus();
+               m_info.WriteIOStatAttach();
                m_info.SetFileSize(tmpStat.st_size);
                m_info.Write(m_info_file, path);
                m_info_file->Fsync();
