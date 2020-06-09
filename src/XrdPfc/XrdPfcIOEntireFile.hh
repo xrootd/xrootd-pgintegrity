@@ -74,6 +74,30 @@ public:
 
    virtual int ReadV(const XrdOucIOVec *readV, int n);
 
+   //---------------------------------------------------------------------
+   //! Pass pgRead request to the corresponding File object.
+   //!
+   //! @param  buff  pointer to buffer where the bytes are to be placed.
+   //! @param  offs  The offset where the read is to start. It must be
+   //!               page aligned.
+   //! @param  rdlen The number of bytes to read. The amount must be an
+   //!               integral number of XrdSys::PageSize bytes.
+   //! @param  csvec A vector whose entries which will be filled with the
+   //!               corresponding CRC32C checksum for each page; sized to:
+   //!               (rdlen/XrdSys::PageSize + (rdlen%XrdSys::PageSize != 0).
+   //! @param  opts  Processing options.
+   //!
+   //! @return >= 0      The number of bytes placed in buffer.
+   //! @return -errno    File could not be read, return value is the reason.
+   //-----------------------------------------------------------------------------
+   using XrdOucCacheIO::pgRead;
+
+   virtual int pgRead(char      *buff,
+                      long long  offs,
+                      int        rdlen,
+                      uint32_t  *csvec,
+                      uint64_t   opts=0) override;
+
    //! \brief Abstract virtual method of XrdPfcIO
    //! Called to check if destruction needs to be done in a separate task.
    bool ioActive() /* override */;

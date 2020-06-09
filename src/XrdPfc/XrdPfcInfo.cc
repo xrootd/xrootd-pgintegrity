@@ -290,7 +290,8 @@ bool Info::Write(XrdOssDF* fp, const std::string &fname)
    if (m_store.m_astats.size() > s_maxNumAccess) CompactifyAccessRecords();
 
    int rc;
-   if ((rc = XrdOucSxeq::Serialize(fp->getFD(), XrdOucSxeq::noWait)))
+   const int fd = fp->getFD();
+   if (fd>=0 && (rc = XrdOucSxeq::Serialize(fd, XrdOucSxeq::noWait)))
    {
       TRACE(Error, trace_pfx << " lock failed " << XrdSysE2T(rc));
       return false;
@@ -317,7 +318,7 @@ bool Info::Write(XrdOssDF* fp, const std::string &fname)
    }
 
    // Can this really fail?
-   if (XrdOucSxeq::Release(fp->getFD()))
+   if (fd>=0 && XrdOucSxeq::Release(fd))
    {
       TRACE(Error, trace_pfx << "un-lock failed");
    }

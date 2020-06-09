@@ -37,11 +37,16 @@ using namespace XrdPfc;
 
 //______________________________________________________________________________
 IOFileBlock::IOFileBlock(XrdOucCacheIO *io, XrdOucCacheStats &statsGlobal, Cache & cache) :
-  IO(io, statsGlobal, cache), m_localStat(0), m_info(cache.GetTrace(), false), m_info_file(0)
+  IO(io, statsGlobal, cache), m_badbs(false), m_localStat(0), m_info(cache.GetTrace(), false),
+  m_info_file(0)
 {
    m_blocksize = Cache::GetInstance().RefConfiguration().m_hdfsbsize;
    GetBlockSizeFromPath();
    initLocalStat();
+   if ((m_blocksize % Cache::GetInstance().RefConfiguration().m_bufferSize) != 0)
+   {
+      m_badbs = true;
+   }
 }
 
 //______________________________________________________________________________
@@ -272,6 +277,22 @@ int IOFileBlock::initLocalStat()
 //______________________________________________________________________________
 int IOFileBlock::Read(char *buff, long long off, int size)
 {
+  return pgAwareRead(buff, off, size, false, nullptr, 0);
+}
+
+//______________________________________________________________________________
+int IOFileBlock::pgAwareRead(char *buff, long long off, int size, bool ispg, uint32_t *csvec, uint64_t opts)
+{
+   if (m_badbs)
+   {
+      return -EINVAL;
+   }
+
+   if (ispg)
+   {
+     if ((off % XrdSys::PageSize) != 0 || (size % XrdSys::PageSize) != 0) return -EINVAL;
+   }
+
    // protect from reads over the file size
 
    long long fileSize = FSize();
@@ -282,8 +303,11 @@ int IOFileBlock::Read(char *buff, long long off, int size)
    {
       return -EINVAL;
    }
+
    if (off + size > fileSize)
       size = fileSize - off;
+
+   uint32_t *pvec = csvec;
 
    long long off0 = off;
    int idx_first  = off0 / m_blocksize;
@@ -340,9 +364,18 @@ int IOFileBlock::Read(char *buff, long long off, int size)
 
       TRACEIO(Dump, "IOFileBlock::Read() block[ " << blockIdx << "] read-block-size[" << readBlockSize << "], offset[" << readBlockSize << "] off = " << off );
 
-      int retvalBlock = (fb != 0) ?
-         fb->Read(this, buff, off, readBlockSize) :
-         GetInput()->Read(buff, off, readBlockSize);
+      int retvalBlock;
+      if (ispg)
+      {
+         const int rbs = XrdSys::PageSize * ((readBlockSize + XrdSys::PageSize - 1)/XrdSys::PageSize);
+         retvalBlock = (fb != 0) ?
+            fb->pgRead(this, buff, off, rbs, pvec, opts) :
+            GetInput()->pgRead(buff, off, rbs, pvec, opts);
+      } else{
+         retvalBlock = (fb != 0) ?
+            fb->Read(this, buff, off, readBlockSize) :
+            GetInput()->Read(buff, off, readBlockSize);
+      }
 
       TRACEIO(Dump, "IOFileBlock::Read()  Block read returned " << retvalBlock);
       if (retvalBlock == readBlockSize)
@@ -350,6 +383,10 @@ int IOFileBlock::Read(char *buff, long long off, int size)
          bytes_read += retvalBlock;
          buff       += retvalBlock;
          off        += retvalBlock;
+         if (ispg)
+         {
+            pvec += ((retvalBlock+XrdSys::PageSize-1)/XrdSys::PageSize);
+         }
       }
       else if (retvalBlock >= 0)
       {
@@ -364,4 +401,14 @@ int IOFileBlock::Read(char *buff, long long off, int size)
    }
 
    return bytes_read;
+}
+
+//______________________________________________________________________________
+int IOFileBlock::pgRead(char	*buff,
+                      long long  offs,
+                      int        rdlen,
+                      uint32_t  *csvec,
+                      uint64_t   opts)
+{
+   return pgAwareRead(buff, offs, rdlen, true, csvec, opts);
 }

@@ -24,12 +24,17 @@
 #include "XrdOuc/XrdOucCache.hh"
 #include "XrdOuc/XrdOucIOVec.hh"
 
+#include "XrdSys/XrdSysPageSize.hh"
+
 #include "XrdPfcInfo.hh"
 #include "XrdPfcStats.hh"
 
 #include <string>
 #include <map>
 #include <set>
+#include <list>
+#include <utility>
+#include <unordered_set>
 
 class XrdJob;
 class XrdOucIOVec;
@@ -64,6 +69,7 @@ public:
    IO                 *m_io;            // IO that handled current request, used for == / != comparisons only
 
    char               *m_buff;
+   uint32_t           *m_csvec;
    long long           m_offset;
    int                 m_size;
    int                 m_refcnt;
@@ -71,12 +77,13 @@ public:
    bool                m_downloaded;
    bool                m_prefetch;
 
-   Block(File *f, IO *io, char *buf, long long off, int size, bool m_prefetch) :
-      m_file(f), m_io(io), m_buff(buf), m_offset(off), m_size(size),
+   Block(File *f, IO *io, char *buf, uint32_t *crcbuf, long long off, int size, bool m_prefetch) :
+      m_file(f), m_io(io), m_buff(buf), m_csvec(crcbuf), m_offset(off), m_size(size),
       m_refcnt(0), m_errno(0), m_downloaded(false), m_prefetch(m_prefetch)
    {}
 
    char*     get_buff()   { return m_buff;   }
+   uint32_t* get_csvec()  { return m_csvec;  }
    int       get_size()   { return m_size;   }
    long long get_offset() { return m_offset; }
 
@@ -162,6 +169,9 @@ public:
 
    //! Normal read.
    int Read (IO *io, char* buff, long long offset, int size);
+
+   //! pgRead to read with crc values
+   int pgRead(IO *io, char* buff, long long offset, int size, uint32_t *csvec, uint64_t opts);
 
    //----------------------------------------------------------------------
    //! \brief Data and cinfo files are open.
@@ -287,10 +297,17 @@ private:
    typedef std::set<Block*>      BlockSet_t;
    typedef BlockSet_t::iterator  BlockSet_i;
 
+   typedef std::unordered_set<int> RedoBlockSet_t;
+   typedef std::list<std::pair<int, long long > > ErrorBlocks_t;
 
    BlockMap_t m_block_map;
 
    XrdSysCondVar m_state_cond;
+
+   int m_sync_waiters_cnt;             //!< number of condition variable waiters for sync to finish
+   int m_diskblock_readers_cnt;        //!< number of sets of reads from disk blocks ongoing
+   int m_diskblock_waiters_cnt;        //!< number of waiters for disk block based activity to stop
+   bool m_diskblock_read_draining;     //!< indicate if new disk block reads should be paused
 
    Stats         m_stats;              //!< cache statistics for this instance
    Stats         m_last_stats;         //!< copy of cache stats during last purge cycle, used for per directory stat reporting
@@ -305,6 +322,8 @@ private:
 
    static const char *m_traceID;
 
+   void ClearDiskBlocks(const RedoBlockSet_t &);
+
    bool overlap(int blk,               // block to query
                 long long blk_size,    //
                 long long req_off,     // offset of user request
@@ -315,16 +334,23 @@ private:
                 long long &size);
 
    // Read
+
+   //! read with or without returning csum values and list of csum failing blocks
+   int partialRead(IO *io, char* buff, long long offset, int size, RedoBlockSet_t &, bool ispg, uint32_t *csvec, uint64_t opts);
+
+   //! readv with list of csum failing blocks
+   int partialReadV(IO *io, const XrdOucIOVec *readV, int n, RedoBlockSet_t &);
+
    Block* PrepareBlockRequest(int i, IO *io, bool prefetch);
    
    void   ProcessBlockRequest (Block       *b,    bool prefetch);
    void   ProcessBlockRequests(BlockList_t& blks, bool prefetch);
 
    int    RequestBlocksDirect(IO *io, DirectResponseHandler *handler, IntList_t& blocks,
-                              char* buff, long long req_off, long long req_size);
+                              char* buff, long long req_off, long long req_size, bool ispg, uint32_t *csvec, uint64_t opts);
 
    int    ReadBlocksFromDisk(IntList_t& blocks,
-                             char* req_buf, long long req_off, long long req_size);
+                             char* req_buf, long long req_off, long long req_size, ErrorBlocks_t &, bool ispg, uint32_t *csvec, uint64_t opts);
 
    // VRead
    bool VReadValidate     (const XrdOucIOVec *readV, int n);
@@ -332,9 +358,11 @@ private:
                            BlockList_t&        blks_to_request,
                            ReadVBlockListRAM&  blks_to_process,
                            ReadVBlockListDisk& blks_on_disk,
-                           std::vector<XrdOucIOVec>& chunkVec);
+                           std::vector<XrdOucIOVec>& chunkVec,
+                           const RedoBlockSet_t &csredoset);
    int  VReadFromDisk     (const XrdOucIOVec *readV, int n,
-                           ReadVBlockListDisk& blks_on_disk);
+                           ReadVBlockListDisk& blks_on_disk,
+                           ErrorBlocks_t &error_blocks);
    int  VReadProcessBlocks(IO *io, const XrdOucIOVec *readV, int n,
                            std::vector<ReadVChunkListRAM>& blks_to_process,
                            std::vector<ReadVChunkListRAM>& blks_processed,

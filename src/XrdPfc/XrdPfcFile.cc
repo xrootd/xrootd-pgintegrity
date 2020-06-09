@@ -32,7 +32,10 @@
 #include "XrdOss/XrdOss.hh"
 #include "XrdOuc/XrdOucEnv.hh"
 #include "XrdSfs/XrdSfsInterface.hh"
+#include "XrdSys/XrdSysPageSize.hh"
 #include "XrdPfc.hh"
+
+#include <algorithm>
 
 
 using namespace XrdPfc;
@@ -65,6 +68,10 @@ File::File(const std::string& path, long long iOffset, long long iFileSize) :
    m_non_flushed_cnt(0),
    m_in_sync(false),
    m_state_cond(0),
+   m_sync_waiters_cnt(0),
+   m_diskblock_readers_cnt(0),
+   m_diskblock_waiters_cnt(0),
+   m_diskblock_read_draining(false),
    m_prefetch_state(kOff),
    m_prefetch_read_cnt(0),
    m_prefetch_hit_cnt(0),
@@ -369,6 +376,16 @@ bool File::Open()
 
    const Configuration &conf = Cache::GetInstance().RefConfiguration();
 
+   if (conf.m_hasfscs)
+   {
+      if ((m_offset % XrdSys::PageSize) != 0)
+      {
+         TRACEF(Error, "File::Open() can not open a fragmented file with offset which is not a multiple of the pagesize.");
+         errno = EINVAL;
+         return false;
+      }
+   }
+
    XrdOss     &myOss  = * Cache::GetInstance().GetOss();
    const char *myUser =   conf.m_username.c_str();
    XrdOucEnv   myEnv;
@@ -430,12 +447,22 @@ bool File::Open()
              ", data_size_stat=" << (data_existed ? data_stat.st_size : -1ll) <<
              ", data_size_from_last_block=" << m_cfi.GetExpectedDataFileSize() << ")");
 
-      // Check if data file exists and is of reasonable size.
-      if (data_existed && data_stat.st_size >= m_cfi.GetExpectedDataFileSize())
+      if (!data_existed || data_stat.st_size < m_cfi.GetExpectedDataFileSize())
+      {
+         // Checked if data file exists and is of reasonable size.
+         TRACEF(Warning, "Open - data file is missing or shorter than expected.");
+      }
+      else if (conf.m_hasfscs && (m_cfi.GetBufferSize() % XrdSys::PageSize) != 0)
+      {
+         // Checked if the buffersize is compatible with FSCS operation
+         TRACEF(Warning, "Open - buffersize in info file is not a multiple of pagesize.");
+      }
+      else
       {
          initialize_info_file = false;
       }
-      else
+
+      if (initialize_info_file)
       {
          TRACEF(Warning, "Open - basic sanity checks on data file failed, resetting info file.");
          m_cfi.ResetAllAccessStats();
@@ -445,6 +472,10 @@ bool File::Open()
    {
       m_cfi.SetBufferSize(conf.m_bufferSize);
       m_cfi.SetFileSize(m_file_size);
+      if (conf.m_hasfscs && info_existed)
+      {
+         m_info_file->Ftruncate(0);
+      }
       m_cfi.Write(m_info_file);
       m_info_file->Fsync();
       int ss = (m_file_size - 1)/m_cfi.GetBufferSize() + 1;
@@ -513,11 +544,15 @@ Block* File::PrepareBlockRequest(int i, IO *io, bool prefetch)
    long long this_bs = (i == last_block) ? m_file_size - off : BS;
 
    Block *b   = 0;
-   char  *buf = cache()->RequestRAM(this_bs);
+
+   size_t crcidx;
+   char  *buf = cache()->RequestRAM(this_bs, &crcidx);
+   uint32_t *crcbuf = nullptr;
 
    if (buf)
    {
-      b = new (std::nothrow) Block(this, io, buf, off, this_bs, prefetch);
+      crcbuf = reinterpret_cast<uint32_t*>(&buf[crcidx]);
+      b = new (std::nothrow) Block(this, io, buf, crcbuf, off, this_bs, prefetch);
 
       if (b)
       {
@@ -546,7 +581,13 @@ void File::ProcessBlockRequest(Block *b, bool prefetch)
    // This *must not* be called with block_map locked.
 
   BlockResponseHandler* oucCB = new BlockResponseHandler(b, prefetch);
-  b->get_io()->GetInput()->Read(*oucCB, b->get_buff(), b->get_offset(), b->get_size());
+  const int rsize = XrdSys::PageSize*((b->get_size() + XrdSys::PageSize -1)/XrdSys::PageSize);
+
+  // block's buffer will always be large enough even if the last block is longer than expected
+  // specify verify to be sure that data bytes in memory are valid:
+  // they may be served back to a client before being pgwritten then pgread (with verify) from disk
+
+  b->get_io()->GetInput()->pgRead(*oucCB, b->get_buff(), b->get_offset(), rsize, b->get_csvec(), XrdOssDF::Verify);
 }
 
 void File::ProcessBlockRequests(BlockList_t& blks, bool prefetch)
@@ -557,14 +598,21 @@ void File::ProcessBlockRequests(BlockList_t& blks, bool prefetch)
    {
       Block *b = *bi;
       BlockResponseHandler* oucCB = new BlockResponseHandler(b, prefetch);
-      b->get_io()->GetInput()->Read(*oucCB, b->get_buff(), b->get_offset(), b->get_size());
+      const int rsize = XrdSys::PageSize*((b->get_size() + XrdSys::PageSize -1)/XrdSys::PageSize);
+
+      // block's buffer will always be large enough even if the last block is longer than expected
+      // specify verify to be sure that data bytes in memory are valid:
+      // they may be served back to a client before being pgwritten then pgread (with verify) from disk
+
+      b->get_io()->GetInput()->pgRead(*oucCB, b->get_buff(), b->get_offset(), rsize, b->get_csvec(), XrdOssDF::Verify);
    }
 }
 
 //------------------------------------------------------------------------------
 
 int File::RequestBlocksDirect(IO *io, DirectResponseHandler *handler, IntList_t& blocks,
-                              char* req_buf, long long req_off, long long req_size)
+                              char* req_buf, long long req_off, long long req_size,
+                              bool ispg, uint32_t *csvec, uint64_t opts)
 {
    const long long BS = m_cfi.GetBufferSize();
 
@@ -581,7 +629,17 @@ int File::RequestBlocksDirect(IO *io, DirectResponseHandler *handler, IntList_t&
 
       overlap(*ii, BS, req_off, req_size, off, blk_off, size);
 
-      io->GetInput()->Read( *handler, req_buf + off, *ii * BS + blk_off, size);
+      if (ispg)
+      {
+         uint32_t *pvec = nullptr;
+         if (csvec) pvec = &csvec[off/XrdSys::PageSize];
+         // request should already meet pgRead alignment restrictions
+         io->GetInput()->pgRead( *handler, req_buf + off, *ii * BS + blk_off, size, pvec, opts);
+      }
+      else
+      {
+         io->GetInput()->Read( *handler, req_buf + off, *ii * BS + blk_off, size);
+      }
       TRACEF(Dump, "RequestBlockDirect success, idx = " <<  *ii << " size = " <<  size);
 
       total += size;
@@ -593,7 +651,9 @@ int File::RequestBlocksDirect(IO *io, DirectResponseHandler *handler, IntList_t&
 //------------------------------------------------------------------------------
 
 int File::ReadBlocksFromDisk(std::list<int>& blocks,
-                             char* req_buf, long long req_off, long long req_size)
+                             char* req_buf, long long req_off, long long req_size,
+                             ErrorBlocks_t &error_blocks,
+                             bool ispg, uint32_t *csvec, uint64_t opts)
 {
    TRACEF(Dump, "File::ReadBlocksFromDisk " <<  blocks.size());
    const long long BS = m_cfi.GetBufferSize();
@@ -611,19 +671,32 @@ int File::ReadBlocksFromDisk(std::list<int>& blocks,
 
       overlap(*ii, BS, req_off, req_size, off, blk_off, size);
 
-      long long rs = m_data_file->Read(req_buf + off, *ii * BS + blk_off -m_offset, size);
+      long long rs;
+      if (ispg)
+      {
+         uint32_t *pvec = nullptr;
+         if (csvec) pvec = &csvec[off/XrdSys::PageSize];
+         // offset and size should already meet the pgRead alignment restrictions
+         rs = m_data_file->pgRead(req_buf + off, *ii * BS + blk_off -m_offset, size, pvec, opts);
+      }
+      else
+      {
+         rs = m_data_file->Read(req_buf + off, *ii * BS + blk_off -m_offset, size);
+      }
       TRACEF(Dump, "File::ReadBlocksFromDisk block idx = " <<  *ii << " size= " << size);
 
       if (rs < 0)
       {
          TRACEF(Error, "File::ReadBlocksFromDisk neg retval = " <<  rs << " idx = " << *ii );
-         return rs;
+         error_blocks.push_back(std::make_pair(*ii, rs));
+         continue;
       }
 
       if (rs != size)
       {
          TRACEF(Error, "File::ReadBlocksFromDisk incomplete size = " <<  rs << " idx = " << *ii);
-         return -EIO;
+         error_blocks.push_back(std::make_pair(*ii, -EIO));
+         continue;
       }
 
       total += rs;
@@ -636,6 +709,61 @@ int File::ReadBlocksFromDisk(std::list<int>& blocks,
 
 int File::Read(IO *io, char* iUserBuff, long long iUserOff, int iUserSize)
 {
+  RedoBlockSet_t badblocks;
+  int nb = 0;
+  int ret;
+  int tot=0;
+  do
+  {
+    ret = partialRead(io, iUserBuff, iUserOff, iUserSize, badblocks, false, nullptr, 0);
+    if (ret<0) return ret;
+    tot += ret;
+    const int newnb = badblocks.size();
+    if (nb>0 && newnb>=nb)
+    {
+       // number of badblock not decresing
+       return -EDOM;
+    }
+    nb = newnb;
+  } while(nb>0);
+  return tot;
+}
+
+//------------------------------------------------------------------------------
+
+int File::pgRead(IO *io, char* iUserBuff, long long iUserOff, int iUserSize, uint32_t *csvec, uint64_t opts)
+{
+  RedoBlockSet_t badblocks;
+  int nb = 0;
+  int ret;
+  int tot=0;
+  do
+  {
+    ret = partialRead(io, iUserBuff, iUserOff, iUserSize, badblocks, true, csvec, opts);
+    if (ret<0) return ret;
+    tot += ret;
+    const int newnb = badblocks.size();
+    if (nb>0 && newnb>=nb)
+    {
+       // number of badblock not decresing
+       return -EDOM;
+    }
+    nb = newnb;
+  } while(nb>0);
+  return tot;
+}
+
+//------------------------------------------------------------------------------
+
+int File::partialRead(IO *io, char* iUserBuff, long long iUserOff, int iUserSize, RedoBlockSet_t &csredoset, bool ispg, uint32_t *csvec, uint64_t opts)
+{
+   if (ispg)
+   {
+     if ((iUserOff % XrdSys::PageSize) != 0 || (iUserSize % XrdSys::PageSize) != 0) return -EINVAL;
+   }
+
+   const Configuration &conf = Cache::GetInstance().RefConfiguration();
+
    const long long BS = m_cfi.GetBufferSize();
 
    Stats loc_stats;
@@ -660,11 +788,29 @@ int File::Read(IO *io, char* iUserBuff, long long iUserOff, int iUserSize)
 
    m_state_cond.Lock();
 
+   if (m_diskblock_read_draining)
+   {
+      m_diskblock_waiters_cnt++;
+      while(m_diskblock_readers_cnt>0)
+      {
+         m_state_cond.Wait();
+      }
+      m_diskblock_waiters_cnt--;
+   }
+
    if ( ! m_is_open)
    {
       m_state_cond.UnLock();
       TRACEF(Error, "File::Read file is not open");
-      return io->GetInput()->Read(iUserBuff, iUserOff, iUserSize);
+      if (ispg)
+      {
+         // the user should have made sure iUserOff iUserSize meeting the pgRead alignment restrictions
+         return io->GetInput()->pgRead(iUserBuff, iUserOff, iUserSize, csvec, opts);
+      }
+      else
+      {
+         return io->GetInput()->Read(iUserBuff, iUserOff, iUserSize);
+      }
    }
    if (m_in_shutdown)
    {
@@ -674,6 +820,10 @@ int File::Read(IO *io, char* iUserBuff, long long iUserOff, int iUserSize)
 
    for (int block_idx = idx_first; block_idx <= idx_last; ++block_idx)
    {
+      if (!csredoset.empty() && csredoset.count(block_idx)==0)
+      {
+         continue;
+      }
       TRACEF(Dump, "File::Read() idx " << block_idx);
       BlockMap_i bi = m_block_map.find(block_idx);
 
@@ -712,7 +862,13 @@ int File::Read(IO *io, char* iUserBuff, long long iUserOff, int iUserSize)
       }
    }
 
+   if (!blks_on_disk.empty())
+   {
+      m_diskblock_readers_cnt++;
+   }
+
    m_state_cond.UnLock();
+   csredoset.clear();
 
    ProcessBlockRequests(blks_to_request, false);
 
@@ -728,7 +884,7 @@ int File::Read(IO *io, char* iUserBuff, long long iUserOff, int iUserSize)
    {
       direct_handler = new DirectResponseHandler(blks_direct.size());
 
-      direct_size = RequestBlocksDirect(io, direct_handler, blks_direct, iUserBuff, iUserOff, iUserSize);
+      direct_size = RequestBlocksDirect(io, direct_handler, blks_direct, iUserBuff, iUserOff, iUserSize, ispg, csvec, opts);
 
       TRACEF(Dump, "File::Read() direct read requests sent out, size = " << direct_size);
    }
@@ -736,17 +892,48 @@ int File::Read(IO *io, char* iUserBuff, long long iUserOff, int iUserSize)
    // Second, read blocks from disk.
    if ( ! blks_on_disk.empty() && bytes_read >= 0)
    {
-      int rc = ReadBlocksFromDisk(blks_on_disk, iUserBuff, iUserOff, iUserSize);
+      // have to set Verify so we can discover if the copy cache has crc mismatch: otherwise
+      // in the case of a pgRead client, we would reply on the client coming back
+      // with the Verify option set before discoving corruption in our cache
+      ErrorBlocks_t error_blocks;
+      int rc = ReadBlocksFromDisk(blks_on_disk, iUserBuff, iUserOff, iUserSize, error_blocks, ispg, csvec, XrdOssDF::Verify);
       TRACEF(Dump, "File::Read() " << (void*)iUserBuff <<" from disk finished size = " << rc);
-      if (rc >= 0)
+      for(const auto &be: error_blocks)
       {
-         bytes_read += rc;
-         loc_stats.m_BytesHit += rc;
+         const int blk = be.first;
+         const long long blkrc = be.second;
+         if (conf.m_hasfscs && (blkrc == -EDOM || blkrc == -EIO))
+         {
+            csredoset.insert(blk);
+         } else {
+            // a non-csum error
+            error_cond = blkrc;
+            TRACEF(Error, "File::Read() failed read from disk");
+            break;
+         }
       }
-      else
+      bytes_read += rc;
+      loc_stats.m_BytesHit += rc;
+   }
+
+   if (! blks_on_disk.empty())
+   {
+     if  (csredoset.size()>0)
       {
-         error_cond = rc;
-         TRACEF(Error, "File::Read() failed read from disk");
+         XrdSysCondVarHelper _lck(m_state_cond);
+         m_diskblock_read_draining = true;
+      }
+      ClearDiskBlocks(csredoset);
+      for(const auto &b: csredoset)
+      {
+        blks_on_disk.remove(b);
+      }
+      XrdSysCondVarHelper _lck(m_state_cond);
+      m_diskblock_readers_cnt--;
+      if (m_diskblock_waiters_cnt>0 && m_diskblock_readers_cnt==0)
+      {
+         m_state_cond.Broadcast();
+         m_diskblock_read_draining = false;
       }
    }
 
@@ -807,6 +994,10 @@ int File::Read(IO *io, char* iUserBuff, long long iUserOff, int iUserSize)
 
             TRACEF(Dump, "File::Read() ub=" << (void*)iUserBuff  << " from finished block " << (*bi)->m_offset/BS << " size " << size_to_copy);
             memcpy(&iUserBuff[user_off], &((*bi)->m_buff[off_in_block]), size_to_copy);
+            if (ispg && csvec)
+            {
+               memcpy(&csvec[user_off/XrdSys::PageSize], (*bi)->get_csvec() + off_in_block/XrdSys::PageSize, 4*((size_to_copy+XrdSys::PageSize-1)/XrdSys::PageSize));
+            }
             bytes_read += size_to_copy;
 
             if (requested_blocks.find(*bi) == requested_blocks.end())
@@ -896,6 +1087,62 @@ int File::Read(IO *io, char* iUserBuff, long long iUserOff, int iUserSize)
 
 //------------------------------------------------------------------------------
 
+void File::ClearDiskBlocks(const RedoBlockSet_t &blk_idxs)
+{
+   bool schedule_sync = false;
+
+   if (blk_idxs.size()>0)
+   {
+      XrdSysCondVarHelper _lck(m_state_cond);
+
+      for(const auto &bidx: blk_idxs)
+      {
+         m_cfi.ClearBitWritten(offsetIdx(bidx));
+      }
+
+      if (m_in_sync)
+      {
+         for(const auto &bidx: blk_idxs)
+         {
+            m_writes_during_sync.erase(std::remove(m_writes_during_sync.begin(), m_writes_during_sync.end(), offsetIdx(bidx)), m_writes_during_sync.end());
+         }
+         m_sync_waiters_cnt++;
+	 do
+         {
+            m_state_cond.Wait();
+         } while(m_in_sync);
+         m_sync_waiters_cnt--;
+      }
+
+      for(const auto &bidx: blk_idxs)
+      {
+         m_cfi.ClearBitSynced(offsetIdx(bidx));
+      }
+
+      if (! m_in_shutdown)
+      {
+         schedule_sync     = true;
+         m_in_sync         = true;
+         m_non_flushed_cnt = 0;
+      }
+   }
+
+   if (schedule_sync)
+   {
+      cache()->ScheduleFileSync(this);
+      XrdSysCondVarHelper _lck(m_state_cond);
+      m_sync_waiters_cnt++;
+      while(m_in_sync)
+      {
+         m_state_cond.Wait();
+      }
+      m_sync_waiters_cnt--;
+   }
+}
+
+
+//------------------------------------------------------------------------------
+
 void File::WriteBlockToDisk(Block* b)
 {
    // write block buffer into disk file
@@ -903,7 +1150,8 @@ void File::WriteBlockToDisk(Block* b)
    long long   size   = (offset + m_cfi.GetBufferSize()) > m_file_size ? (m_file_size - offset) : m_cfi.GetBufferSize();
    const char *buff   = &b->m_buff[0];
 
-   ssize_t retval = m_data_file->Write(buff, offset, size);
+   // the in memory block has already been checked, so do not specify Verify for pgWrite
+   ssize_t retval = m_data_file->pgWrite((void*)buff, offset, size, b->get_csvec(), 0);
 
    if (retval < size)
    {
@@ -1002,6 +1250,10 @@ void File::Sync()
 
       m_writes_during_sync.clear();
       m_in_sync = false;
+      if (m_sync_waiters_cnt>0)
+      {
+         m_state_cond.Broadcast();
+      }
 
       return;
    }
@@ -1016,6 +1268,10 @@ void File::Sync()
       written_while_in_sync = m_non_flushed_cnt = (int) m_writes_during_sync.size();
       m_writes_during_sync.clear();
       m_in_sync = false;
+      if (m_sync_waiters_cnt>0)
+      {
+         m_state_cond.Broadcast();
+      }
    }
    TRACEF(Dump, "File::Sync "<< written_while_in_sync  << " blocks written during sync");
 }
@@ -1124,6 +1380,13 @@ void File::ProcessBlockResponse(BlockResponseHandler* brh, int res)
    Block *b = brh->m_block;
 
    TRACEF(Dump, "File::ProcessBlockResponse " << (void*)b << "  " << b->m_offset/BufferSize());
+
+   if (res>=0 && res != b->get_size())
+   {
+     TRACEF(Error, "File::ProcessBlockResponse block " << b << "  " << (int)(b->m_offset/BufferSize()) <<
+        " unexpected read length " << res << " wanted " << b->get_size());
+     res = -EIO;
+   }
 
    // Deregister block from IO's prefetch count, if needed.
    if (brh->m_for_prefetch)
