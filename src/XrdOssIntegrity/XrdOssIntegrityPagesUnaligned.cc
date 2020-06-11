@@ -119,29 +119,19 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
       }
       else
       {
-         if (tracked_off == 0 && p1_off == 0)
+         if (p1 == tracked_page && p1_off == 0 && bavail >= tracked_off)
+         {
+            // at start of last block and overwriting anything currently in the block
+            const uint32_t crc32c = XrdOucCRC::Calc32C(buff, bavail, 0U);
+            const ssize_t wret = ts_->WriteTags(&crc32c, p1, 1);
+            if (wret<0) return wret;
+         }
+         else
+         {
+            // have to read some preexisting data and/or implied zero bytes
+            size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
+            if (toread>0)
             {
-               // appending at the start of empty block
-               const uint32_t crc32c = XrdOucCRC::Calc32C(buff, bavail, 0U);
-               const ssize_t wret = ts_->WriteTags(&crc32c, p1, 1);
-               if (wret<0) return wret;
-            }
-            else if (tracked_off == p1_off)
-            {
-               // strictly appending: can recalc crc with new data
-               // without rereeading existing partial block's data
-               uint32_t crc32v;
-               const ssize_t rret = ts_->ReadTags(&crc32v, p1, 1);
-               if (rret<0) return rret;
-               const uint32_t crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32v);
-               const ssize_t wret = ts_->WriteTags(&crc32c, p1, 1);
-               if (wret<0) return wret;
-            }
-            else
-            {
-               // have to read some preexisting data and/or implied zero bytes
-               size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
-               if (toread>0) {
                ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
                if (rret<0) return -EIO;
                const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
