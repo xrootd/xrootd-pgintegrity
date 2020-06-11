@@ -25,3 +25,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 find_package(XRootD REQUIRED)
 
 add_subdirectory(src)
+
+if(BUILD_TEST)
+    add_subdirectory(tests)
+endif()
