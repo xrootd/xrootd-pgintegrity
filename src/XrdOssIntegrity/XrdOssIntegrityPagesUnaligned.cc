@@ -124,7 +124,7 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
          // Therefore it is not tested and optimised for here.
 
          // read some preexisting data and/or implied zero bytes
-         size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
+         const size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
          if (toread>0)
          {
             ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
@@ -149,24 +149,44 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
       }
    }
 
-   // first (inclusive) and last (exclusive) full page
-   const off_t fp = (p1_off != 0) ? p1+1 : p1;
-   const off_t lp = p2;
-   if (fp<lp)
+   // next page (if any)
+   const off_t np = (p1_off != 0) ? p1+1 : p1;
+   // next page starts at buffer offset
+   const size_t npoff = p1_off ? (XrdSys::PageSize - p1_off) : 0;
+
+   // anything in next page?
+   if (blen <= npoff) return 0;
+
+   const uint8_t *const p = (uint8_t*)buff;
+
+   // see if there will be no old data to account for in the last page
+   if (p2_off == 0 || (offset + blen >= static_cast<size_t>(trackinglen)))
    {
-      const uint8_t *p = (uint8_t*)buff;
-      const ssize_t aret = apply_sequential_aligned_modify(&p[p1_off ? XrdSys::PageSize-p1_off : 0], fp, lp-fp, nullptr, 0);
+      const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, nullptr);
       if (aret<0) return aret;
+      return 0;
    }
 
-   // partial last page (if not already covered as being first page)
-   if (p2>p1 && p2_off>0)
+   // last page contains existing data that has to be read to modify it
+   const size_t toread = (p2==tracked_page) ? tracked_off : XrdSys::PageSize;
+   uint8_t b[XrdSys::PageSize];
+   if (toread>0)
    {
-      const uint8_t *p = (uint8_t*)buff;
-      const uint32_t crc32c = XrdOucCRC::Calc32C(&p[blen-p2_off], p2_off, 0U);
-      const ssize_t wret = ts_->WriteTags(&crc32c, p2, 1);
-      if (wret<0) return wret;
+      ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p2, toread);
+      if (rret<0) return -EIO;
+      const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
+      uint32_t crc32v;
+      rret = ts_->ReadTags(&crc32v, p2, 1);
+      if (rret<0) return rret;
+      if (crc32v != crc32c)
+      {
+         return -EDOM;
+      }
    }
+   memcpy(b,&p[blen-p2_off],p2_off);
+   const uint32_t crc32c = XrdOucCRC::Calc32C(b, std::max(p2_off,toread), 0U);
+   const ssize_t wret = ts_->WriteTags(&crc32c, p2, 1);
+   if (wret<0) return wret;
 
    return 0;
 }
@@ -201,13 +221,13 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
          return -EDOM;
       }
    }
-    
+
    // first (inclusive) and last (exclusive) full page
    const off_t fp = (p1_off != 0) ? p1+1 : p1;
    const off_t lp = p2;
    if (fp<lp)
    {
-      const uint8_t *p = (uint8_t*)buff;
+      const uint8_t *const p = (uint8_t*)buff;
       uint32_t calcbuf[1024],rbuf[1024];
       const size_t bufsz = sizeof(calcbuf)/sizeof(uint32_t);
       size_t toread = lp-fp;
@@ -234,7 +254,7 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
       uint8_t b[XrdSys::PageSize];
       ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize*p2, bavail);
       if (rret<0) return rret;
-      const uint8_t *p = (uint8_t*)buff;
+      const uint8_t *const p = (uint8_t*)buff;
       if (memcmp(&p[blen-p2_off], b, p2_off))
       {
          return -EIO;

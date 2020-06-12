@@ -153,38 +153,30 @@ ssize_t XrdOssIntegrityPages::VerifyRange(XrdOssDF *const fd, const void *buff, 
    return vret;
 }
 
-ssize_t XrdOssIntegrityPages::apply_sequential_aligned_modify(const void *const buff, const off_t start, const size_t n, uint32_t *csvec, const uint64_t opts)
+ssize_t XrdOssIntegrityPages::apply_sequential_aligned_modify(const void *const buff, const off_t startp, const size_t nbytes, uint32_t *csvec)
 {
-   // if csvec given store those values
-   // if csvec given + Verify opt then check supplied csvec values againat data before storing
-   // if no csvec then calculate against data and store
-
-   if (n==0) return 0;
+   if (nbytes==0) return 0;
 
    uint32_t calcbuf[1024];
    const size_t calcbufsz = sizeof(calcbuf)/sizeof(uint32_t);
-   const uint8_t *p = (uint8_t*)buff;
+   const uint8_t *const p = (uint8_t*)buff;
 
-   size_t towrite = n;
+   size_t towrite = nbytes;
    size_t nwritten = 0;
    while(towrite>0)
    {
       size_t wcnt = towrite;
-      if (!csvec || (opts & XrdOssDF::Verify))
+      if (!csvec)
       {
-         wcnt = std::min(wcnt, calcbufsz);
-         XrdOucCRC::Calc32C(&p[4*nwritten], wcnt*XrdSys::PageSize, calcbuf);
-         if (csvec && memcmp(&csvec[nwritten], calcbuf, 4*wcnt))
-         {
-            return -EDOM;
-         }
+         wcnt = std::min(wcnt, calcbufsz*XrdSys::PageSize);
+         XrdOucCRC::Calc32C(&p[nwritten], wcnt, calcbuf);
       }
-      const ssize_t wret = ts_->WriteTags(csvec ? csvec : calcbuf, start+nwritten, wcnt);
+      const ssize_t wret = ts_->WriteTags(csvec ? csvec : calcbuf, startp+(nwritten/XrdSys::PageSize), (wcnt+XrdSys::PageSize-1)/XrdSys::PageSize);
       if (wret<0) return wret;
-      towrite -= wret;
-      nwritten += wret;
+      towrite -= wcnt;
+      nwritten += wcnt;
    }
-   return nwritten;
+   return (nwritten+XrdSys::PageSize-1)/XrdSys::PageSize;
 }
 
 ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *const csvec, const uint64_t opts)
@@ -222,7 +214,7 @@ ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const of
    const size_t vrbufsz = sizeof(vrbuf)/sizeof(uint32_t);
 
    // pointer to data
-   const uint8_t *p = (uint8_t*)buff;
+   const uint8_t *const p = (uint8_t*)buff;
   
    // process full pages + any partial page
    size_t toread = (p2_off>0) ? nfull+1 : nfull;
@@ -276,30 +268,28 @@ int XrdOssIntegrityPages::StoreRangeAligned(const void *const buff, const off_t 
       if (ret<0) return ret;
    }
 
-   const off_t p2 = (offset+blen) / XrdSys::PageSize;
-
-   const size_t nfull = p2-p1;
-
-   const ssize_t aret = apply_sequential_aligned_modify(buff, p1, nfull, csvec, opts);
-   if (aret<0) return aret;
-
-   const size_t p2_off = (offset+blen) % XrdSys::PageSize;
-   if (p2_off > 0)
+   if (csvec && (opts & XrdOssDF::Verify))
    {
-      const uint32_t crc32val = csvec ? csvec[nfull] : 0U;
-      uint32_t crc32calc;
-      if (!csvec || (opts & XrdOssDF::Verify))
+      uint32_t calcbuf[1024];
+      const size_t calcbufsz = sizeof(calcbuf)/sizeof(uint32_t);
+      const uint8_t *const p = (uint8_t*)buff;
+      size_t tocheck = blen;
+      size_t nchecked = 0;
+      while(tocheck>0)
       {
-         const uint8_t *p = (uint8_t*)buff;
-         crc32calc = XrdOucCRC::Calc32C(&p[XrdSys::PageSize*nfull],p2_off,0U);
-         if (csvec && crc32val != crc32calc)
+         const size_t ccnt = std::min(tocheck, calcbufsz*XrdSys::PageSize);
+         XrdOucCRC::Calc32C(&p[nchecked], ccnt, calcbuf);
+         if (memcmp(&csvec[nchecked/XrdSys::PageSize], calcbuf, 4*((ccnt+XrdSys::PageSize-1)/XrdSys::PageSize)))
          {
             return -EDOM;
          }
+         tocheck -= ccnt;
+         nchecked += ccnt;
       }
-      const ssize_t wret = ts_->WriteTags(csvec ? &crc32val : &crc32calc, p2, 1);
-      if (wret<0) return wret;
    }
+
+   const ssize_t aret = apply_sequential_aligned_modify(buff, p1, blen, csvec);
+   if (aret<0) return aret;
 
    return 0;
 }

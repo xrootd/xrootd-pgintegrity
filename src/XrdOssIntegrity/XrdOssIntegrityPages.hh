@@ -65,7 +65,7 @@ public:
    void TrackedSizeRelease();
 
 protected:
-   ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, uint32_t *, uint64_t);
+   ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, uint32_t *);
    std::unique_ptr<XrdOssIntegrityTagstore> ts_;
    XrdSysMutex rangeaddmtx_;
    XrdOssIntegrityRanges ranges_;
