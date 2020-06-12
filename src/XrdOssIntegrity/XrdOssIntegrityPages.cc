@@ -366,39 +366,44 @@ int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIn
    {
       int ret = UpdateRangeHoleUntilPage(p_until,sizes);
       if (ret<0) return ret;
-      if (p_off != 0)
-      {
-         static const uint8_t bz[XrdSys::PageSize] = {0};
-         const uint32_t crc32c = XrdOucCRC::Calc32C(bz, p_off, 0U);
-         const ssize_t wret = ts_->WriteTags(&crc32c, p_until, 1);
-         if (wret < 0) return wret;
-      }
-      LockTruncateSize(len,true);
-      rg.unlockTrackinglen();
-      return 0;
    }
 
-   const off_t tracked_page = trackinglen / XrdSys::PageSize;
-   const size_t tracked_off = trackinglen % XrdSys::PageSize;
-
-   if (len<trackinglen && p_off != 0)
+   if (len != trackinglen && p_off != 0)
    {
-      size_t toread = (p_until==tracked_page) ? tracked_off : XrdSys::PageSize;
-      uint8_t b[XrdSys::PageSize];
-      ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, p_until*XrdSys::PageSize, toread);
-      if (rret<0) return rret;
-      const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
-      uint32_t crc32v;
-      rret = ts_->ReadTags(&crc32v, p_until, 1);
-      if (rret<0) return rret;
-      if (crc32v != crc32c)
+      const off_t tracked_page = trackinglen / XrdSys::PageSize;
+      const size_t tracked_off = trackinglen % XrdSys::PageSize;
+      size_t toread = tracked_off;
+      if (len>trackinglen)
       {
-         return -EDOM;
+         if (p_until != tracked_page) toread = 0;
       }
-      const uint32_t crc32c2 = XrdOucCRC::Calc32C(b, p_off, 0U);
-      const ssize_t wret = ts_->WriteTags(&crc32c2, p_until, 1);
+      else
+      {
+         if (p_until != tracked_page) toread = XrdSys::PageSize;
+      }
+      uint8_t b[XrdSys::PageSize];
+      if (toread>0)
+      {
+         ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, p_until*XrdSys::PageSize, toread);
+         if (rret<0) return rret;
+         const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
+         uint32_t crc32v;
+         rret = ts_->ReadTags(&crc32v, p_until, 1);
+         if (rret<0) return rret;
+         if (crc32v != crc32c)
+         {
+            return -EDOM;
+         }
+      }
+      if (p_off > toread)
+      {
+         memset(&b[toread],0,p_off-toread);
+      }
+      const uint32_t crc32c = XrdOucCRC::Calc32C(b, p_off, 0U);
+      const ssize_t wret = ts_->WriteTags(&crc32c, p_until, 1);
       if (wret < 0) return wret;
    }
+
    LockTruncateSize(len,true);
    rg.unlockTrackinglen();
    return 0;
