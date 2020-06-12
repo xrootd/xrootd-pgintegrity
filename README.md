@@ -31,7 +31,7 @@ the stored CRC32C values.
 Usage:
 ------
 
-e.g. with an Xcache, specifying 'tags' as the space name for the files
+e.g. with an Xcache, using 'tags' as the space name for the files
 containing the CRC32C values:
 
 ```
@@ -49,7 +49,7 @@ Options
 ```
 nofill
 When writing to a point after the current end of file the space between, a hole,
-will contain zeros. Specifying 'nofill' indicates the XrdOssIntegrity should
+will contain zeros. Adding the option 'nofill' indicates the XrdOssIntegrity should
 skip writing the page tags with the CRC32C value for the implied zero pages.
 Not filling will result in subsequent reads of the hole pages giving checksum
 errors. Usually this is not desirable, unless it is known that hole pages
@@ -57,6 +57,5 @@ should not be read. Partial write of pages implies a read-modify-write, which
 would also fail.
 
 space=name
-Specifyies the Oss space name to be used for the files containing the CRC32C
-values.
+The Oss space name to be used for the files containing the CRC32C values.
 ```
