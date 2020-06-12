@@ -17,13 +17,6 @@
 
 namespace integrationTests {
 
-extern "C"
-  typedef XrdOss *(*myAddStorageSystem2_t)(XrdOss	  *native_oss,
-                                           XrdSysLogger *Logger,
-                                           const char   *config_fn,
-                                           const char   *parms,
-                                           XrdOucEnv    *envP);
-
 class ossintegrity_pageTest : public ::testing::Test {
 protected:
 
@@ -37,7 +30,7 @@ protected:
     XrdVERSIONINFODEF(v, "testint", XrdVNUMBER,XrdVERSION);
     XrdOss *ossP = XrdOssDefaultSS(&logger, config_fn, v);
 
-    m_libp = dlopen("/usr/lib64/libXrdOssIntegrity-5.so",RTLD_NOW|RTLD_GLOBAL);
+    m_libp = dlopen("libXrdOssIntegrity-5.so",RTLD_NOW|RTLD_GLOBAL);
     ASSERT_TRUE( m_libp != nullptr );
 
     XrdOssAddStorageSystem2_t oss2P=nullptr;
@@ -245,6 +238,26 @@ TEST_F(ossintegrity_pageTest,readpartial) {
   ASSERT_TRUE(memcmp(rbuf,&m_b[2048],12288)==0);
 }
 
+TEST_F(ossintegrity_pageTest,extendwrite) {
+  ssize_t ret = m_file->Write(m_b,0,4000);
+  ASSERT_TRUE(ret == 4000);
+  ret = m_file->Write(&m_b[4200], 4200, 10);
+  ASSERT_TRUE(ret == 10);
+  ret = m_file->Write(&m_b[4096], 4096, 4096);
+  ASSERT_TRUE(ret == 4096);
+  ret = m_file->Write(&m_b[12288], 12288, 4096);
+  ASSERT_TRUE(ret == 4096);
+  uint8_t rbuf[16384];
+  ret = m_file->Read(rbuf,0,16384);
+  ASSERT_TRUE(ret == 16384);
+  uint8_t cbuf[16384];
+  memset(cbuf,0,16384);
+  memcpy(cbuf,m_b,4000);
+  memcpy(&cbuf[4096], &m_b[4096],4096);
+  memcpy(&cbuf[12288], &m_b[12288],4096);
+  ASSERT_TRUE(memcmp(cbuf,rbuf,16384)==0);
+}
+
 TEST_F(ossintegrity_pageTest,badcrc) {
   uint32_t csvec[4] = { 0x1, 0x2, 0x3, 0x4 };
   ssize_t ret = m_file->pgWrite(m_b, 0, 16384, csvec, XrdOssDF::Verify);
@@ -287,6 +300,64 @@ TEST_F(ossintegrity_pageTest,badcrc) {
   ret = m_file->pgRead(rbuf, 4096, 12288, csvec, XrdOssDF::Verify);
   ASSERT_TRUE(ret == 12288);
   ASSERT_TRUE(memcmp(csvec,&csvec2[1],3*4)==0);
+}
+
+TEST_F(ossintegrity_pageTest,truncate) {
+  ssize_t ret = m_file->Ftruncate(16384);
+  ASSERT_TRUE(ret == 0);
+  uint8_t rbuf[16384];
+  ret = m_file->Read(rbuf, 0, 16384);
+  ASSERT_TRUE(ret == 16384);
+  uint8_t rbuf2[16384];
+  memset(rbuf2, 0, 16384);
+  ASSERT_TRUE(memcmp(rbuf,rbuf2,16384)==0);
+  ret = m_file->Write(&m_b[10000], 10000, 100);
+  ASSERT_TRUE(ret == 100);
+  ret = m_file->Ftruncate(10050);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->Ftruncate(10100);
+  ASSERT_TRUE(ret == 0);
+  uint32_t csvec[1];
+  ret = m_file->pgRead(rbuf, 8192, 4096, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 1908);
+  memset(rbuf2, 0, 1908);
+  memcpy(&rbuf2[1808], &m_b[10000], 50);
+  ASSERT_TRUE(memcmp(rbuf, rbuf2, 1908)==0);
+  ASSERT_TRUE(csvec[0] == 0x45b62822);
+}
+
+TEST_F(ossintegrity_pageTest,partialwrite) {
+  ssize_t ret = m_file->Write(m_b, 0, 12288);
+  ASSERT_TRUE(ret == 12288);
+  ret = m_file->Write(&m_b[2048], 2048, 8192);
+  ASSERT_TRUE(ret == 8192);
+  uint8_t rbuf[12288];
+  ret = m_file->Read(rbuf, 0, 12288);
+  ASSERT_TRUE(ret == 12288);
+}
+
+TEST_F(ossintegrity_pageTest,pgwriteverifyabort) {
+  ssize_t ret = m_file->Write(m_b, 0, 12288);
+  ASSERT_TRUE(ret == 12288);
+  uint8_t buf[16384];
+  memset(buf,0,4096);
+  ret = m_file->Write(buf, 12288, 4096);
+  ASSERT_TRUE(ret == 4096);
+  uint32_t csvec[4];
+  ret = m_file->pgRead(buf, 0, 16384, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 16384);
+  memset(buf,0,12288);
+  csvec[0] = csvec[3];
+  csvec[1] = csvec[3];
+  ret = m_file->pgWrite(buf, 0, 12288, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == -EDOM);
+  ret = m_file->Read(buf, 0, 12288);
+  ASSERT_TRUE(ret == 12288);
+  ASSERT_TRUE(memcmp(buf, m_b, 12288) == 0);
+  csvec[2] = csvec[3];
+  memset(buf,0,12288);
+  ret = m_file->pgWrite(buf, 0, 12288, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 12288);
 }
 
 } // namespace integrationTests
