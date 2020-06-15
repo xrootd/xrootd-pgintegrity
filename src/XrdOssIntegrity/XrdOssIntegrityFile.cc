@@ -33,6 +33,7 @@
 #include "XrdOssIntegrityTagstoreFile.hh"
 #include "XrdOssIntegrityPages.hh"
 #include "XrdOssIntegrityRanges.hh"
+#include "XrdOuc/XrdOucCRC.hh"
 #include "XrdOuc/XrdOucEnv.hh"
 #include "XrdOuc/XrdOuca2x.hh"
 #include "XrdSfs/XrdSfsAio.hh"
@@ -409,11 +410,21 @@ ssize_t XrdOssIntegrityFile::pgRead (void *buffer, off_t offset, size_t rdlen, u
 ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, uint32_t *csvec, uint64_t opts)
 {
    if (!pages_) return -EBADF;
+   if (rdonly_) return -EBADF;
+
+   if (csvec && (opts & XrdOssDF::Verify))
+   {
+      uint32_t valcs;
+      if (XrdOucCRC::Ver32C((void *)buffer, wrlen, csvec, valcs)>=0)
+      {
+         return -EDOM;
+      }
+   }
 
    XrdOssIntegrityRangeGuard rg;
    pages_->LockRange(rg, offset, wrlen, false);
 
-   int puret = pages_->StoreRange(successor_, buffer, offset, wrlen, csvec, opts, rg);
+   int puret = pages_->StoreRange(successor_, buffer, offset, wrlen, csvec, rg);
    if (puret<0) return (ssize_t)puret;
    ssize_t towrite = wrlen;
    ssize_t bwritten = 0;

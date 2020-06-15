@@ -115,30 +115,30 @@ TEST_F(ossintegrity_pageTest,twopages) {
   ASSERT_TRUE(csvec[1] == 0x68547dba);
 }
 
-TEST_F(ossintegrity_pageTest,oneandhalfpage) {
-  ssize_t ret = m_file->Write(m_b, 0, 6144);
-  ASSERT_TRUE(ret == 6144);
+TEST_F(ossintegrity_pageTest,oneandpartpage) {
+  ssize_t ret = m_file->Write(m_b, 0, 6143);
+  ASSERT_TRUE(ret == 6143);
   uint8_t rbuf[8192];
   uint32_t csvec[2];
   ret = m_file->pgRead(rbuf, 0, 8192, csvec, XrdOssDF::Verify);
-  ASSERT_TRUE(ret == 6144);
-  ASSERT_TRUE( memcmp(rbuf,m_b,6144)==0 );
+  ASSERT_TRUE(ret == 6143);
+  ASSERT_TRUE( memcmp(rbuf,m_b,6143)==0 );
   ASSERT_TRUE(csvec[0] == 0x353125d0);
-  ASSERT_TRUE(csvec[1] == 0xc3a06e21);
+  ASSERT_TRUE(csvec[1] == 0x7bf5fca1);
 }
 
-TEST_F(ossintegrity_pageTest,upperhalfpage) {
-  ssize_t ret = m_file->Write(&m_b[2048], 2048, 2048);
-  ASSERT_TRUE(ret == 2048);
+TEST_F(ossintegrity_pageTest,upperpartpage) {
+  ssize_t ret = m_file->Write(&m_b[2049], 2049, 2047);
+  ASSERT_TRUE(ret == 2047);
   uint8_t rbuf[4096];
   uint32_t csvec[1];
   ret = m_file->pgRead(rbuf, 0, 4096, csvec, XrdOssDF::Verify);
   ASSERT_TRUE(ret == 4096);
   uint8_t cbuf[4096];
-  memset(cbuf,0,2048);
-  memcpy(&cbuf[2048],&m_b[2048],2048);
+  memset(cbuf,0,2049);
+  memcpy(&cbuf[2049],&m_b[2049],2047);
   ASSERT_TRUE( memcmp(rbuf,cbuf,4096)==0 );
-  ASSERT_TRUE(csvec[0] == 0x486f4f9f);
+  ASSERT_TRUE(csvec[0] == 0xfe965ca0);
 }
 
 TEST_F(ossintegrity_pageTest,pagewithhole) {
@@ -174,42 +174,42 @@ TEST_F(ossintegrity_pageTest,pagewithholefilled) {
 }
 
 TEST_F(ossintegrity_pageTest,extendtotwo) {
-  ssize_t ret = m_file->Write(m_b, 0, 2048);
-  ASSERT_TRUE(ret == 2048);
-  ret = m_file->Write(&m_b[4096], 4096, 2048);
-  ASSERT_TRUE(ret == 2048);
+  ssize_t ret = m_file->Write(m_b, 0, 2047);
+  ASSERT_TRUE(ret == 2047);
+  ret = m_file->Write(&m_b[4096], 4096, 2049);
+  ASSERT_TRUE(ret == 2049);
   uint8_t rbuf[8192];
   uint32_t csvec[2];
   ret = m_file->pgRead(rbuf, 0, 8192, csvec, XrdOssDF::Verify);
-  ASSERT_TRUE(ret == 6144);
-  uint8_t cbuf[6144];
-  memcpy(cbuf, m_b, 2048);
-  memset(&cbuf[2048],0,2048);
-  memcpy(&cbuf[4096],&m_b[4096],2048);
-  ASSERT_TRUE( memcmp(rbuf,cbuf,6144)==0);
-  ASSERT_TRUE(csvec[0] == 0xe5a72bc6);
-  ASSERT_TRUE(csvec[1] == 0xc3a06e21);
+  ASSERT_TRUE(ret == 6145);
+  uint8_t cbuf[6145];
+  memcpy(cbuf, m_b, 2047);
+  memset(&cbuf[2047],0,2049);
+  memcpy(&cbuf[4096],&m_b[4096],2049);
+  ASSERT_TRUE( memcmp(rbuf,cbuf,6145)==0);
+  ASSERT_TRUE(csvec[0] == 0xe7625dd6);
+  ASSERT_TRUE(csvec[1] == 0x3e455e47);
 }
 
 TEST_F(ossintegrity_pageTest,threepartial) {
-  ssize_t ret = m_file->Write(&m_b[2048], 2048, 8192);
-  ASSERT_TRUE(ret == 8192);
+  ssize_t ret = m_file->Write(&m_b[2049], 2049, 8193);
+  ASSERT_TRUE(ret == 8193);
   uint8_t rbuf[12288];
   uint32_t csvec[3];
   ret = m_file->pgRead(rbuf, 0, 12288, csvec, XrdOssDF::Verify);
-  ASSERT_TRUE(ret == 10240);
-  uint8_t cbuf[10240];
-  memset(cbuf,0,2048);
-  memcpy(&cbuf[2048],&m_b[2048],8192);
-  ASSERT_TRUE( memcmp(rbuf, cbuf, 10240) == 0);
-  ASSERT_TRUE(csvec[0] == 0x486f4f9f);
+  ASSERT_TRUE(ret == 10242);
+  uint8_t cbuf[10242];
+  memset(cbuf,0,2049);
+  memcpy(&cbuf[2049],&m_b[2049],8193);
+  ASSERT_TRUE( memcmp(rbuf, cbuf, 10242) == 0);
+  ASSERT_TRUE(csvec[0] == 0xfe965ca0);
   ASSERT_TRUE(csvec[1] == 0x68547dba);
-  ASSERT_TRUE(csvec[2] == 0xf5870638);
+  ASSERT_TRUE(csvec[2] == 0x8bb57f35);
 }
 
 TEST_F(ossintegrity_pageTest,threepartial2) {
-  ssize_t ret = m_file->Write(&m_b[2048], 2048, 8192);
-  ASSERT_TRUE(ret == 8192);
+  ssize_t ret = m_file->Write(&m_b[2049], 2049, 8193);
+  ASSERT_TRUE(ret == 8193);
   ret = m_file->Write(&m_b[10],10,10);
   ASSERT_TRUE(ret == 10);
   ret = m_file->Write(&m_b[12268], 12268, 10);
@@ -221,21 +221,21 @@ TEST_F(ossintegrity_pageTest,threepartial2) {
   uint8_t cbuf[12278];
   memset(cbuf,0,12278);
   memcpy(&cbuf[10],&m_b[10],10);
-  memcpy(&cbuf[2048],&m_b[2048],8192);
+  memcpy(&cbuf[2049],&m_b[2049],8193);
   memcpy(&cbuf[12268],&m_b[12268],10);
   ASSERT_TRUE( memcmp(rbuf, cbuf, 12278) == 0);
-  ASSERT_TRUE(csvec[0] == 0xb9e53b70);
+  ASSERT_TRUE(csvec[0] == 0x0f1c284f);
   ASSERT_TRUE(csvec[1] == 0x68547dba);
-  ASSERT_TRUE(csvec[2] == 0x56811520);
+  ASSERT_TRUE(csvec[2] == 0xb851d608);
 }
 
 TEST_F(ossintegrity_pageTest,readpartial) {
   ssize_t ret = m_file->Write(m_b, 0, 16384);
   ASSERT_TRUE(ret == 16384);
-  uint8_t rbuf[12288];
-  ret = m_file->Read(rbuf, 2048, 12288);
-  ASSERT_TRUE(ret == 12288);
-  ASSERT_TRUE(memcmp(rbuf,&m_b[2048],12288)==0);
+  uint8_t rbuf[12289];
+  ret = m_file->Read(rbuf, 2049, 12289);
+  ASSERT_TRUE(ret == 12289);
+  ASSERT_TRUE(memcmp(rbuf,&m_b[2049],12289)==0);
 }
 
 TEST_F(ossintegrity_pageTest,extendwrite) {
@@ -247,15 +247,21 @@ TEST_F(ossintegrity_pageTest,extendwrite) {
   ASSERT_TRUE(ret == 4096);
   ret = m_file->Write(&m_b[12288], 12288, 4096);
   ASSERT_TRUE(ret == 4096);
-  uint8_t rbuf[16384];
-  ret = m_file->Read(rbuf,0,16384);
-  ASSERT_TRUE(ret == 16384);
-  uint8_t cbuf[16384];
-  memset(cbuf,0,16384);
+  ret = m_file->Write(&m_b[5000], 16384, 50);
+  ASSERT_TRUE(ret == 50);
+  ret = m_file->Write(&m_b[6000], 16434, 50);
+  ASSERT_TRUE(ret == 50);
+  uint8_t rbuf[16484];
+  ret = m_file->Read(rbuf,0,16484);
+  ASSERT_TRUE(ret == 16484);
+  uint8_t cbuf[16484];
+  memset(cbuf,0,16484);
   memcpy(cbuf,m_b,4000);
   memcpy(&cbuf[4096], &m_b[4096],4096);
   memcpy(&cbuf[12288], &m_b[12288],4096);
-  ASSERT_TRUE(memcmp(cbuf,rbuf,16384)==0);
+  memcpy(&cbuf[16384], &m_b[5000], 50);
+  memcpy(&cbuf[16434], &m_b[6000], 50);
+  ASSERT_TRUE(memcmp(cbuf,rbuf,16484)==0);
 }
 
 TEST_F(ossintegrity_pageTest,badcrc) {
@@ -327,32 +333,36 @@ TEST_F(ossintegrity_pageTest,truncate) {
 }
 
 TEST_F(ossintegrity_pageTest,partialwrite) {
-  ssize_t ret = m_file->Write(m_b, 0, 12288);
-  ASSERT_TRUE(ret == 12288);
-  ret = m_file->Write(&m_b[2048], 2048, 8192);
-  ASSERT_TRUE(ret == 8192);
-  uint8_t rbuf[12288];
-  ret = m_file->Read(rbuf, 0, 12288);
-  ASSERT_TRUE(ret == 12288);
+  ssize_t ret = m_file->Write(m_b, 0, 12289);
+  ASSERT_TRUE(ret == 12289);
+  ret = m_file->Write(&m_b[2049], 2047, 8194);
+  ASSERT_TRUE(ret == 8194);
+  uint8_t rbuf[12289];
+  ret = m_file->Read(rbuf, 0, 12289);
+  ASSERT_TRUE(ret == 12289);
+  uint8_t cbuf[12289];
+  memcpy(cbuf,m_b,12289);
+  memcpy(&cbuf[2047],&m_b[2049],8194);
+  ASSERT_TRUE(memcmp(rbuf,cbuf,12289)==0);
 }
 
 TEST_F(ossintegrity_pageTest,pgwriteverifyabort) {
   ssize_t ret = m_file->Write(m_b, 0, 12288);
   ASSERT_TRUE(ret == 12288);
-  uint8_t buf[16384];
-  memset(buf,0,4096);
-  ret = m_file->Write(buf, 12288, 4096);
-  ASSERT_TRUE(ret == 4096);
-  uint32_t csvec[4];
-  ret = m_file->pgRead(buf, 0, 16384, csvec, XrdOssDF::Verify);
-  ASSERT_TRUE(ret == 16384);
+  uint8_t buf[20480];
+  memset(buf,0,4097);
+  ret = m_file->Write(buf, 12288, 4097);
+  ASSERT_TRUE(ret == 4097);
+  uint32_t csvec[5];
+  ret = m_file->pgRead(buf, 0, 20480, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 16385);
   memset(buf,0,12288);
   csvec[0] = csvec[3];
   csvec[1] = csvec[3];
-  ret = m_file->pgWrite(buf, 0, 12288, csvec, XrdOssDF::Verify);
+  ret = m_file->pgWrite(buf, 8192, 12288, csvec, XrdOssDF::Verify);
   ASSERT_TRUE(ret == -EDOM);
-  ret = m_file->Read(buf, 0, 12288);
-  ASSERT_TRUE(ret == 12288);
+  ret = m_file->Read(buf, 0, 20480);
+  ASSERT_TRUE(ret == 16385);
   ASSERT_TRUE(memcmp(buf, m_b, 12288) == 0);
   csvec[2] = csvec[3];
   memset(buf,0,12288);

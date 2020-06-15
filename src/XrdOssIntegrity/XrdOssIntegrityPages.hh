@@ -55,7 +55,7 @@ public:
    int Fsync() { return ts_->Fsync(); }
 
    ssize_t FetchRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssIntegrityRangeGuard&);
-   int StoreRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssIntegrityRangeGuard&);
+   int StoreRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, XrdOssIntegrityRangeGuard&);
    void LockRange(XrdOssIntegrityRangeGuard &, off_t, size_t, bool);
 
    int truncate(XrdOssDF *, off_t, XrdOssIntegrityRangeGuard&);
@@ -80,7 +80,7 @@ protected:
    ssize_t VerifyRangeAligned(const void *, off_t, size_t, const Sizes_t &);
    ssize_t VerifyRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
    ssize_t FetchRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
-   int StoreRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
+   int StoreRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *);
 
    bool sizesInconsistentForWrite(off_t, size_t, const Sizes_t &);
 
@@ -99,6 +99,8 @@ protected:
       if (nread != sz) return -EIO;
       return nread;
    }
+
+   const size_t stsize_ = 1024;
 };
 
 #endif

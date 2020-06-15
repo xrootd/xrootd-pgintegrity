@@ -32,6 +32,7 @@
 #include "XrdOssIntegrity.hh"
 #include "XrdOssIntegrityPages.hh"
 #include "XrdOssIntegrityFileAio.hh"
+#include "XrdOuc/XrdOucCRC.hh"
 #include "XrdSys/XrdSysPageSize.hh"
 
 #include <string>
@@ -107,13 +108,22 @@ int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
    if (!pages_) return -EBADF;
    if (rdonly_) return -EBADF;
 
+   if (aioparm->cksVec && (opts & XrdOssDF::Verify))
+   {
+      uint32_t valcs;
+      if (XrdOucCRC::Ver32C((void *)aioparm->sfsAio.aio_buf, (size_t)aioparm->sfsAio.aio_nbytes, (uint32_t*)aioparm->cksVec, valcs)>=0)
+      {
+         return -EDOM;
+      }
+   }
+
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, opts);
    pages_->LockRange(nio->rg_, (off_t)aioparm->sfsAio.aio_offset, (size_t)aioparm->sfsAio.aio_nbytes, false);
    int puret = pages_->StoreRange(
                         successor_,
                         (const void *)aioparm->sfsAio.aio_buf, (off_t)aioparm->sfsAio.aio_offset,
-                        (size_t)aioparm->sfsAio.aio_nbytes, (uint32_t*)aioparm->cksVec, opts, nio->rg_);
+                        (size_t)aioparm->sfsAio.aio_nbytes, (uint32_t*)aioparm->cksVec, nio->rg_);
    if (puret<0)
    {
       nio->Recycle();
