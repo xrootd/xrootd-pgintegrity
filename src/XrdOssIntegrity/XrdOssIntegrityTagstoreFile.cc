@@ -67,10 +67,13 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    uint32_t magic;
    const uint32_t cmagic = 0x54445258U;
 
-   const int mread = XrdOssIntegrityTagstoreFile::fullread(*fd_, &magic, 0, 4);
+   uint8_t thead[16];
+
+   const int mread = XrdOssIntegrityTagstoreFile::fullread(*fd_, thead, 0, 16);
    bool mok = false;
    if (mread >= 0)
    {
+      memcpy(&magic, thead, 4);
       if (magic == cmagic)
       {
          fileIsBige_ = machineIsBige_;
@@ -94,8 +97,7 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    else
    {
       uint64_t pb;
-      ssize_t rret = XrdOssIntegrityTagstoreFile::fullread(*fd_, &pb, 4, 8);
-      if (rret<0) return rret;
+      memcpy(&pb, &thead[4], 8);
       if (fileIsBige_ == machineIsBige_)
       {
          trackinglen_ = pb;
@@ -106,8 +108,7 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
       }
       const uint32_t cv = XrdOucCRC::Calc32C(&pb, 8, 0U);
       uint32_t rv;
-      rret = XrdOssIntegrityTagstoreFile::fullread(*fd_, &rv, 12, 4);
-      if (rret<0) return rret;
+      memcpy(&rv, &thead[12], 4);
       if (fileIsBige_ != machineIsBige_) rv = bswap_32(rv);
       if (rv != cv)
       {
@@ -115,6 +116,17 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
       }
    }
 
+   const int rsret = ResetSizes(dsize);
+   if (rsret<0) return rsret;
+
+   fdguard.disarm();
+   return 0;
+}
+
+int XrdOssIntegrityTagstoreFile::ResetSizes(const off_t size)
+{
+   if (!isOpen) return -EBADF;
+   actualsize_ = size;
    struct stat sb;
    const int ssret = fd_->Fstat(&sb);
    if (ssret<0) return ssret;
@@ -122,20 +134,17 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    // truncate can be relatively slow
    if (expected_tagfile_size < sb.st_size)
    {
-      fd_->Ftruncate(expected_tagfile_size);
+      const int tret = fd_->Ftruncate(expected_tagfile_size);
+      if (tret<0) return tret;
    }
    else if (expected_tagfile_size > sb.st_size)
    {
       off_t nb = ((sb.st_size - 16)/4);
-      if (nb>0) nb--;
       const int stret = WriteTrackedTagSize(nb*XrdSys::PageSize);
       if (stret<0) return stret;
-      fd_->Ftruncate(16LL + 4*nb);
+      const int tret = fd_->Ftruncate(16LL + 4*nb);
+      if (tret<0) return tret;
    }
-
-   actualsize_ = dsize;
-
-   fdguard.disarm();
    return 0;
 }
 

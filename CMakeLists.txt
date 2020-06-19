@@ -33,7 +33,7 @@ if(BUILD_TEST)
    )
    add_dependencies(gcov test_page XrdOssIntegrity-5)
 else()
-  set(CMAKE_CXX_FLAGS "-O2 -fPIC -pedantic -Wall -Wextra -Wno-unused-parameter -Wno-long-long -fstack-protector-all -Wnon-virtual-dtor -std=c++1y -g")
+  set(CMAKE_CXX_FLAGS "-O2 -fPIC -pedantic -Wall -Wextra -Wno-unused-parameter -Wno-long-long -Wnon-virtual-dtor -std=c++0x -g")
 endif()
 
 

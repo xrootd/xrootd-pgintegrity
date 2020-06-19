@@ -31,6 +31,7 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "Xrd/XrdScheduler.hh"
 #include "XrdOssHandler.hh"
 #include "XrdOssIntegrityConfig.hh"
 #include "XrdOssIntegrityPages.hh"
@@ -40,6 +41,7 @@
 
 // forward decl
 class XrdOssIntegrityFileAio;
+class XrdOssIntegrityFileAioJob;
 
 class XrdOssIntegrityFileAioStore
 {
@@ -67,12 +69,13 @@ private:
 class XrdOssIntegrityFile : public XrdOssDFHandler
 {
 friend XrdOssIntegrityFileAio;
+friend XrdOssIntegrityFileAioJob;
 public:
 
 virtual int     Close(long long *retsz=0) override;
 virtual int     Open(const char *, int, mode_t, XrdOucEnv &) override;
 
-virtual off_t   getMmap(void **) override;
+virtual off_t   getMmap(void **addr) override { if (addr) *addr = 0; return 0; }
 virtual int     getFD() override { return -1; }
 
 virtual int     Fstat(struct stat *) override;
@@ -98,20 +101,31 @@ virtual int     pgWrite(XrdSfsAio*, uint64_t) override;
                 XrdOssIntegrityFile(XrdOss *parent, const char *tid, std::shared_ptr<XrdOssIntegrityConfig> cf) : XrdOssDFHandler(parent->newFile(tid)), parentOss_(parent), tident_(tid), config_(cf), rdonly_(false) { }
 virtual        ~XrdOssIntegrityFile();
 
-static std::mutex pumtx_;
-static std::condition_variable pucond_;
-static std::unordered_map<std::string, std::shared_ptr<XrdOssIntegrityPages> > pumap_;
+struct puMapItem_t {
+   XrdSysCondVar cond;
+   std::shared_ptr<XrdOssIntegrityPages> pages;
+   bool inprogress;
+
+   puMapItem_t() : cond(0), inprogress(false) { }
+   ~puMapItem_t() { }
+};
+
+static XrdSysMutex pumtx_;
+static std::unordered_map<std::string, std::shared_ptr<puMapItem_t> > pumap_;
 
 private:
 XrdOss *parentOss_;
 const char *tident_;
-std::string ipath_;
+std::string tpath_;
 std::shared_ptr<XrdOssIntegrityPages> pages_;
 XrdOssIntegrityFileAioStore aiostore_;
 std::shared_ptr<XrdOssIntegrityConfig> config_;
 bool rdonly_;
 
-int createPageUpdater(const char *, int, XrdOucEnv &);
+int resyncSizes();
+int pageMapClose(const std::string &);
+int pageMapOpen(const std::string &, int, XrdOucEnv &, std::shared_ptr<XrdOssIntegrityPages> &);
+int createPageUpdater(const std::string &, int, XrdOucEnv &, std::shared_ptr<XrdOssIntegrityPages> &);
 };
 
 class XrdOssIntegrity : public XrdOssHandler
@@ -120,7 +134,7 @@ public:
 virtual XrdOssDF *newDir(const char *tident) override { return (XrdOssDF *)new XrdOssIntegrityDir(successor_, tident, config_); }
 virtual XrdOssDF *newFile(const char *tident) override { return (XrdOssDF *)new XrdOssIntegrityFile(successor_, tident, config_); }
 
-virtual int       Init(XrdSysLogger *, const char *) override;
+virtual int       Init(XrdSysLogger *, const char *) override { return XrdOssOK; }
 virtual uint64_t  Features() override { return (successor_->Features() | XRDOSS_HASFSCS); }
 
 virtual int       Unlink(const char *path, int Opts=0, XrdOucEnv *eP=0) override;
@@ -149,6 +163,9 @@ virtual        ~XrdOssIntegrity() { }
       if (p && strlen(p)>=5 && !strcmp(&p[strlen(p)-5],".xrdt")) return true;
       return false;
    }
+
+   int Init(XrdSysLogger *, const char *, XrdOucEnv *);
+   static XrdScheduler *Sched_;
 
 private:
    std::shared_ptr<XrdOssIntegrityConfig> config_;

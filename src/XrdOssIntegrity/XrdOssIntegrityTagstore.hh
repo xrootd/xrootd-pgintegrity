@@ -51,6 +51,7 @@ public:
    virtual off_t GetTrackedDataSize() const=0;
 
    virtual int SetTrackedSize(off_t)=0;
+   virtual int ResetSizes(off_t)=0;
    virtual int Truncate(off_t,bool)=0;
 };
 

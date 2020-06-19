@@ -51,16 +51,22 @@ XrdOssIntegrityPages::Sizes_t XrdOssIntegrityPages::TrackedSizesGet(const bool f
    return std::make_pair(tagsize,datasize);
 }
 
-void XrdOssIntegrityPages::LockSetTrackedSize(const off_t sz)
+int XrdOssIntegrityPages::LockSetTrackedSize(const off_t sz)
 {
    XrdSysCondVarHelper lck(&tscond_);
-   ts_->SetTrackedSize(sz);
+   return ts_->SetTrackedSize(sz);
 }
 
-void XrdOssIntegrityPages::LockTruncateSize(const off_t sz, const bool datatoo)
+int XrdOssIntegrityPages::LockResetSizes(const off_t sz)
 {
    XrdSysCondVarHelper lck(&tscond_);
-   ts_->Truncate(sz,datatoo);
+   return ts_->ResetSizes(sz);
+}
+
+int XrdOssIntegrityPages::LockTruncateSize(const off_t sz, const bool datatoo)
+{
+   XrdSysCondVarHelper lck(&tscond_);
+   return ts_->Truncate(sz,datatoo);
 }
 
 void XrdOssIntegrityPages::TrackedSizeRelease()
@@ -86,11 +92,6 @@ int XrdOssIntegrityPages::UpdateRange(XrdOssDF *const fd, const void *buff, cons
 
    const Sizes_t sizes = rg.getTrackinglens();
 
-   if (sizesInconsistentForWrite(offset, blen, sizes))
-   {
-      return -EIO;
-   }
-
    const off_t trackinglen = sizes.first;
    if (offset+blen > static_cast<size_t>(trackinglen))
    {
@@ -99,7 +100,9 @@ int XrdOssIntegrityPages::UpdateRange(XrdOssDF *const fd, const void *buff, cons
    }
 
    int ret;
-   if ((offset % XrdSys::PageSize) != 0 || (offset+blen < static_cast<size_t>(trackinglen) && (blen % XrdSys::PageSize) != 0) || ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen))
+   if ((offset % XrdSys::PageSize) != 0 ||
+       (offset+blen < static_cast<size_t>(trackinglen) && (blen % XrdSys::PageSize) != 0) ||
+       ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen))
    {
       ret = UpdateRangeUnaligned(fd, buff, offset, blen, sizes);
    }
@@ -153,30 +156,69 @@ ssize_t XrdOssIntegrityPages::VerifyRange(XrdOssDF *const fd, const void *buff, 
    return vret;
 }
 
-ssize_t XrdOssIntegrityPages::apply_sequential_aligned_modify(const void *const buff, const off_t startp, const size_t nbytes, uint32_t *csvec)
+ssize_t XrdOssIntegrityPages::apply_sequential_aligned_modify(
+   const void *const buff, const off_t startp, const size_t nbytes, uint32_t *csvec,
+   const bool preblockset, const bool lastblockset, const uint32_t cspre, const uint32_t cslast)
 {
-   if (nbytes==0) return 0;
+   if (csvec && (preblockset || lastblockset))
+   {
+      return -EINVAL;
+   }
+   if (lastblockset && (nbytes % XrdSys::PageSize)==0)
+   {
+      return -EINVAL;
+   }
+   if (preblockset && startp==0)
+   {
+      return -EINVAL;
+   }
 
    uint32_t calcbuf[stsize_];
    const size_t calcbufsz = sizeof(calcbuf)/sizeof(uint32_t);
    const uint8_t *const p = (uint8_t*)buff;
 
-   size_t towrite = nbytes;
-   size_t nwritten = 0;
-   while(towrite>0)
+   bool dopre = preblockset;
+   const off_t sp = preblockset ? startp-1 : startp;
+
+   size_t blktowrite = ((nbytes+XrdSys::PageSize-1)/XrdSys::PageSize) + (preblockset ? 1 : 0);
+   size_t nblkwritten = 0;
+   size_t calcbytot = 0;
+   while(blktowrite>0)
    {
-      size_t wcnt = towrite;
+      size_t blkwcnt = blktowrite;
       if (!csvec)
       {
-         wcnt = std::min(wcnt, calcbufsz*XrdSys::PageSize);
-         XrdOucCRC::Calc32C(&p[nwritten], wcnt, calcbuf);
+         size_t cidx = 0;
+         size_t calcbycnt = nbytes - calcbytot;
+         if (nblkwritten == 0 && dopre)
+         {
+            calcbycnt = std::min(calcbycnt, (calcbufsz-1)*XrdSys::PageSize);
+            blkwcnt = (calcbycnt+XrdSys::PageSize-1)/XrdSys::PageSize;
+            calcbuf[cidx] = cspre;
+            cidx++;
+            blkwcnt++;
+            dopre = false;
+         }
+         else
+         {
+            calcbycnt = std::min(calcbycnt, calcbufsz*XrdSys::PageSize);
+            blkwcnt = (calcbycnt+XrdSys::PageSize-1)/XrdSys::PageSize;
+         }
+         if ((calcbycnt % XrdSys::PageSize)!=0 && lastblockset)
+         {
+            const size_t x = calcbycnt / XrdSys::PageSize;
+            calcbycnt = XrdSys::PageSize * x;
+            calcbuf[cidx + x] = cslast;
+         }
+         XrdOucCRC::Calc32C(&p[calcbytot], calcbycnt, &calcbuf[cidx]);
+         calcbytot += calcbycnt;
       }
-      const ssize_t wret = ts_->WriteTags(csvec ? &csvec[nwritten/XrdSys::PageSize] : calcbuf, startp+(nwritten/XrdSys::PageSize), (wcnt+XrdSys::PageSize-1)/XrdSys::PageSize);
+      const ssize_t wret = ts_->WriteTags(csvec ? &csvec[nblkwritten] : calcbuf, sp+nblkwritten, blkwcnt);
       if (wret<0) return wret;
-      towrite -= wcnt;
-      nwritten += wcnt;
+      blktowrite -= blkwcnt;
+      nblkwritten += blkwcnt;
    }
-   return (nwritten+XrdSys::PageSize-1)/XrdSys::PageSize;
+   return nblkwritten;
 }
 
 ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *const csvec, const uint64_t opts)
@@ -241,8 +283,8 @@ ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const of
             nverif += vcnt;
          }
       }
-      toread -= rret;
-      nread += rret;
+      toread -= rcnt;
+      nread += rcnt;
    }
 
    return blen;
@@ -267,7 +309,7 @@ int XrdOssIntegrityPages::StoreRangeAligned(const void *const buff, const off_t 
       if (ret<0) return ret;
    }
 
-   const ssize_t aret = apply_sequential_aligned_modify(buff, p1, blen, csvec);
+   const ssize_t aret = apply_sequential_aligned_modify(buff, p1, blen, csvec, false, false, 0U, 0U);
    if (aret<0) return aret;
 
    return 0;
@@ -316,16 +358,6 @@ int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIn
    if (len<0) return -EINVAL;
 
    const Sizes_t sizes = rg.getTrackinglens();
-
-   if (sizes.first != sizes.second)
-   {
-      const off_t low = std::min(sizes.first, sizes.second);
-      const off_t lowp = low / XrdSys::PageSize;
-      if (len > XrdSys::PageSize*lowp)
-      {
-         return -EIO;
-      }
-   }
 
    const off_t trackinglen = sizes.first;
    const off_t p_until = len / XrdSys::PageSize;
@@ -378,7 +410,9 @@ int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIn
    return 0;
 }
 
-ssize_t XrdOssIntegrityPages::FetchRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssIntegrityRangeGuard &rg)
+ssize_t XrdOssIntegrityPages::FetchRange(
+   XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen,
+   uint32_t *csvec, const uint64_t opts, XrdOssIntegrityRangeGuard &rg)
 {
    if (offset<0)
    {
@@ -439,11 +473,6 @@ int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const
    // if the last page is partially filled can not write past it
    if ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen) return -EINVAL;
 
-   if (sizesInconsistentForWrite(offset, blen, sizes))
-   {
-      return -EIO;
-   }
-
    if (offset+blen > static_cast<size_t>(trackinglen))
    {
       LockSetTrackedSize(offset+blen);
@@ -451,22 +480,4 @@ int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const
    }
 
    return StoreRangeAligned(buff,offset,blen,sizes,csvec);
-}
-
-bool XrdOssIntegrityPages::sizesInconsistentForWrite(const off_t off, const size_t blen, const Sizes_t &sizes)
-{
-   if (sizes.first == sizes.second) return false;
-
-   const off_t low = std::min(sizes.first, sizes.second);
-   const off_t lowp = low / XrdSys::PageSize;
-
-   const off_t high = std::max(sizes.first, sizes.second);
-
-   const off_t end = off + static_cast<off_t>(blen);
-
-   if (end <= XrdSys::PageSize*lowp) return false;
-   if (off <= XrdSys::PageSize*lowp && end>=high) return false;
-   if (off <= XrdSys::PageSize*lowp && (end % XrdSys::PageSize)==0) return false;
-
-   return true;
 }

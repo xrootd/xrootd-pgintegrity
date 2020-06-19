@@ -44,6 +44,8 @@
 
 XrdVERSIONINFO(XrdOssAddStorageSystem2,XrdOssIntegrity)
 
+XrdScheduler *XrdOssIntegrity::Sched_;
+
 // skip tag files in directory listing
 int XrdOssIntegrityDir::Readdir(char *buff, int blen)
 {
@@ -56,8 +58,16 @@ int XrdOssIntegrityDir::Readdir(char *buff, int blen)
    return ret;
 }
 
-int XrdOssIntegrity::Init(XrdSysLogger *lP, const char *cP)
+int XrdOssIntegrity::Init(XrdSysLogger *lP, const char *cP, XrdOucEnv *env)
 {
+
+   if ( ! env ||
+        ! (Sched_ = (XrdScheduler*) env->GetPtr("XrdScheduler*")))
+   {
+      Sched_ = new XrdScheduler;
+      Sched_->Start();
+   }
+
    return XrdOssOK;
 }
 
@@ -186,7 +196,7 @@ XrdOss *XrdOssAddStorageSystem2(XrdOss       *curr_oss,
       return nullptr;
    }
    XrdOssIntegrity *myOss = new XrdOssIntegrity(curr_oss, cf);
-   if (myOss->Init(Logger, config_fn) != XrdOssOK)
+   if (myOss->Init(Logger, config_fn, envP) != XrdOssOK)
    {
       delete myOss;
       return nullptr;

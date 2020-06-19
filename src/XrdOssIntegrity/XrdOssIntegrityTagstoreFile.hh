@@ -67,6 +67,8 @@ public:
       return actualsize_;
    }
 
+   virtual int ResetSizes(const off_t size) override;
+
    virtual int SetTrackedSize(const off_t size) override
    {
       if (!isOpen) return -EBADF;
@@ -126,15 +128,16 @@ private:
    int WriteTrackedTagSize(const off_t size)
    {
       if (!isOpen) return -EBADF;
-      trackinglen_ = size;
-      uint64_t x = trackinglen_;
+      uint64_t x = size;
       if (fileIsBige_ != machineIsBige_) x = bswap_64(x);
-      ssize_t wret = fullwrite(*fd_, &x, 4, 8);
-      if (wret<0) return wret;
+      uint8_t wbuf[12];
+      memcpy(wbuf, &x, 8);
       uint32_t cv = XrdOucCRC::Calc32C(&x, 8, 0U);
       if (machineIsBige_ != fileIsBige_) cv = bswap_32(cv);
-      wret = fullwrite(*fd_, &cv, 12, 4);
+      memcpy(&wbuf[8], &cv, 4);
+      ssize_t wret = fullwrite(*fd_, wbuf, 4, 12);
       if (wret<0) return wret;
+      trackinglen_ = size;
       return 0;
    }
 };

@@ -44,10 +44,6 @@
 #include <fcntl.h>
 #include <limits.h>
 
-// storage for class members
-std::mutex XrdOssIntegrityFileAio::recycleMtx_;
-XrdOssIntegrityFileAio *XrdOssIntegrityFileAio::recycleList_;
-
 XrdOssIntegrityFileAioStore::~XrdOssIntegrityFileAioStore()
 {
    XrdOssIntegrityFileAio *p;
@@ -63,7 +59,7 @@ int XrdOssIntegrityFile::Read(XrdSfsAio *aiop)
    if (!pages_) return -EBADF;
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
-   nio->Init(aiop, this, false, 0);
+   nio->Init(aiop, this, false, 0, true);
    pages_->LockRange(nio->rg_, (off_t)aiop->sfsAio.aio_offset, (size_t)aiop->sfsAio.aio_nbytes, true);
    return successor_->Read(nio);
 }
@@ -74,20 +70,9 @@ int XrdOssIntegrityFile::Write(XrdSfsAio *aiop)
    if (rdonly_) return -EBADF;
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
-   nio->Init(aiop, this, false, 0);
+   nio->Init(aiop, this, false, 0, false);
    pages_->LockRange(nio->rg_, (off_t)aiop->sfsAio.aio_offset, (size_t)aiop->sfsAio.aio_nbytes, false);
-   int puret = pages_->UpdateRange(
-                        successor_,
-                        (const void *)aiop->sfsAio.aio_buf, (off_t)aiop->sfsAio.aio_offset,
-                        (size_t)aiop->sfsAio.aio_nbytes, nio->rg_);
-   if (puret<0)
-   {
-      nio->Recycle();
-      aiop->Result = puret;
-      aiop->doneWrite();
-      return 0;
-   }
-   return successor_->Write(nio);
+   return nio->SchedWriteJob();
 }
 
 int XrdOssIntegrityFile::pgRead (XrdSfsAio *aioparm, uint64_t opts)
@@ -98,7 +83,7 @@ int XrdOssIntegrityFile::pgRead (XrdSfsAio *aioparm, uint64_t opts)
    if ((aioparm->sfsAio.aio_nbytes % XrdSys::PageSize) !=0) return -EINVAL;
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
-   nio->Init(aioparm, this, true, opts);
+   nio->Init(aioparm, this, true, opts, true);
    pages_->LockRange(nio->rg_, (off_t)aioparm->sfsAio.aio_offset, (size_t)aioparm->sfsAio.aio_nbytes, true);
    return successor_->Read(nio);
 }
@@ -118,20 +103,9 @@ int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
    }
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
-   nio->Init(aioparm, this, true, opts);
+   nio->Init(aioparm, this, true, opts, false);
    pages_->LockRange(nio->rg_, (off_t)aioparm->sfsAio.aio_offset, (size_t)aioparm->sfsAio.aio_nbytes, false);
-   int puret = pages_->StoreRange(
-                        successor_,
-                        (const void *)aioparm->sfsAio.aio_buf, (off_t)aioparm->sfsAio.aio_offset,
-                        (size_t)aioparm->sfsAio.aio_nbytes, (uint32_t*)aioparm->cksVec, nio->rg_);
-   if (puret<0)
-   {
-      nio->Recycle();
-      aioparm->Result = puret;
-      aioparm->doneWrite();
-      return 0;
-   }
-   return successor_->Write(nio);
+   return nio->SchedWriteJob();
 }
 
 int XrdOssIntegrityFile::Fsync(XrdSfsAio *aiop)

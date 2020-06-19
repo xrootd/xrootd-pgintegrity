@@ -92,6 +92,10 @@ protected:
   bool m_fileopen;
 };
 
+TEST_F(ossintegrity_pageTest,hasfscs) {
+  ASSERT_TRUE((m_oss->Features() & XRDOSS_HASFSCS) != 0);
+}
+
 TEST_F(ossintegrity_pageTest,onepage) {
   ssize_t ret = m_file->Write(m_b, 0, 4096);
   ASSERT_TRUE(ret == 4096);

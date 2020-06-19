@@ -60,12 +60,13 @@ public:
 
    int truncate(XrdOssDF *, off_t, XrdOssIntegrityRangeGuard&);
    Sizes_t TrackedSizesGet(bool);
-   void LockSetTrackedSize(off_t);
-   void LockTruncateSize(off_t,bool);
+   int LockSetTrackedSize(off_t);
+   int LockResetSizes(off_t);
+   int LockTruncateSize(off_t,bool);
    void TrackedSizeRelease();
 
 protected:
-   ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, uint32_t *);
+   ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, uint32_t *, bool, bool, uint32_t, uint32_t);
    std::unique_ptr<XrdOssIntegrityTagstore> ts_;
    XrdSysMutex rangeaddmtx_;
    XrdOssIntegrityRanges ranges_;
@@ -81,8 +82,6 @@ protected:
    ssize_t VerifyRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
    ssize_t FetchRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
    int StoreRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *);
-
-   bool sizesInconsistentForWrite(off_t, size_t, const Sizes_t &);
 
    static ssize_t fullread(XrdOssDF *fd, void *buff, const off_t off , const size_t sz)
    {
@@ -100,7 +99,7 @@ protected:
       return nread;
    }
 
-   const size_t stsize_ = 1024;
+   static const size_t stsize_ = 1024;
 };
 
 #endif

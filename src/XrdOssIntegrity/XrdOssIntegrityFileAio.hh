@@ -31,96 +31,116 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "Xrd/XrdScheduler.hh"
 #include "XrdSfs/XrdSfsAio.hh"
 #include "XrdOssIntegrity.hh"
 
 #include <mutex>
+#include <thread>
+
+class XrdOssIntegrityFileAioJob : public XrdJob
+{
+public:
+
+   XrdOssIntegrityFileAioJob() { }
+   virtual ~XrdOssIntegrityFileAioJob() { }
+
+   void Init(XrdOssIntegrityFile *fp, XrdOssIntegrityFileAio *nio, XrdSfsAio *aiop, bool isPg, bool read)
+   {
+      fp_ =fp;
+      nio_ =nio;
+      aiop_ = aiop;
+      pg_ = isPg;
+      read_ = read;
+   }
+
+   void DoIt() override
+   {
+      if (read_) { DoItRead(); }
+      else { DoItWrite(); }
+   }
+   
+   void DoItRead();
+   void DoItWrite();
+
+private:
+   XrdOssIntegrityFile *fp_;
+   XrdOssIntegrityFileAio *nio_;
+   XrdSfsAio *aiop_;
+   bool pg_;
+   bool read_;
+};
 
 class XrdOssIntegrityFileAio : public XrdSfsAio
 {
 friend XrdOssIntegrityFileAioStore;
 public:
 
-  XrdOssIntegrityRangeGuard rg_;
+   XrdOssIntegrityRangeGuard rg_;
+   uint64_t pgOpts_;
 
-virtual void          doneRead()
-                      {
-                         successor_->Result = this->Result;
-                         if (successor_->Result<0 || this->sfsAio.aio_nbytes==0)
-                         {
-                            rg_.ReleaseAll();
-                            successor_->doneRead();
-                            return;
-                         }
-                         ssize_t puret;
-                         if (isPgOp_)
-                         {
-                            puret = file_->pages_->FetchRange(file_->successor_, (void *)this->sfsAio.aio_buf, (off_t)this->sfsAio.aio_offset , (size_t)this->Result, (uint32_t*)this->cksVec, this->pgOpts_, rg_);
-                         }
-                         else
-                         {
-                            puret = file_->pages_->VerifyRange(file_->successor_, (void *)this->sfsAio.aio_buf, (off_t)this->sfsAio.aio_offset , (size_t)this->Result, rg_);
-                         }
-                         if (puret<0)
-                         {
-                            successor_->Result = puret;
-                         }
-                         if (puret != successor_->Result)
-                         {
-                            successor_->Result = -EIO;
-                         }
-                         rg_.ReleaseAll();
-                         successor_->doneRead();
-                      }
+   virtual void doneRead() override
+   {
+      successor_->Result = this->Result;
+      if (successor_->Result<0 || this->sfsAio.aio_nbytes==0)
+      {
+         rg_.ReleaseAll();
+         successor_->doneRead();
+         return;
+      }
+      SchedReadJob();
+   }
 
-virtual void          doneWrite()
-                      { 
-                         successor_->Result = this->Result;
-                         if (successor_->Result<0)
-                         {
-                            rg_.ReleaseAll();
-                            successor_->doneWrite();
-                            return;
-                         }
-                         ssize_t towrite = this->sfsAio.aio_nbytes - this->Result;
-                         ssize_t nwritten = this->Result;
-                         const char *p = (const char*)this->sfsAio.aio_buf;
-                         while(towrite>0)
-                         {
-                            const ssize_t wret = file_->successor_->Write(&p[nwritten], this->sfsAio.aio_offset+nwritten, towrite);
-                            if (wret<0)
-                            {
-                               successor_->Result = wret;
-                               rg_.ReleaseAll();
-                               successor_->doneWrite();
-                               return;
-                            }
-                            towrite -= wret;
-                            nwritten += wret;
-                         }
-                         rg_.ReleaseAll();
-                         successor_->doneWrite();
-                      }
+   virtual void doneWrite() override
+   { 
+      successor_->Result = this->Result;
+      if (successor_->Result<0)
+      {
+         rg_.ReleaseAll();
+         file_->resyncSizes();
+         successor_->doneWrite();
+         return;
+      }
+      ssize_t towrite = this->sfsAio.aio_nbytes - this->Result;
+      ssize_t nwritten = this->Result;
+      const char *p = (const char*)this->sfsAio.aio_buf;
+      while(towrite>0)
+      {
+         const ssize_t wret = file_->successor_->Write(&p[nwritten], this->sfsAio.aio_offset+nwritten, towrite);
+         if (wret<0)
+         {
+            successor_->Result = wret;
+            rg_.ReleaseAll();
+            file_->resyncSizes();
+            successor_->doneWrite();
+            return;
+         }
+         towrite -= wret;
+         nwritten += wret;
+      }
+      rg_.ReleaseAll();
+      successor_->doneWrite();
+   }
 
-virtual void          Recycle()
-                      {
-                         rg_.ReleaseAll();
-                         successor_->Recycle();
-                         successor_ = nullptr;
-                         file_ = nullptr;
-                         if (store_)
-                         {
-                            std::lock_guard<std::mutex> guard(store_->mtx_);
-                            next_ = store_->list_;
-                            store_->list_ = this;
-                         }
-                         else
-                         {
-                            delete this;
-                         }
-                      }
+   virtual void Recycle()
+   {
+      rg_.ReleaseAll();
+      successor_->Recycle();
+      successor_ = nullptr;
+      file_ = nullptr;
+      if (store_)
+      {
+         std::lock_guard<std::mutex> guard(store_->mtx_);
+         next_ = store_->list_;
+         store_->list_ = this;
+      }
+      else
+      {
+         delete this;
+      }
+   }
   
-   void Init(XrdSfsAio *successor, XrdOssIntegrityFile *file, bool isPgOp, uint64_t opts)
+   void Init(XrdSfsAio *successor, XrdOssIntegrityFile *file, bool isPgOp, uint64_t opts, bool isread)
    {
       successor_ = successor;
       this->sfsAio.aio_fildes = successor->sfsAio.aio_fildes;
@@ -133,6 +153,8 @@ virtual void          Recycle()
       file_ = file;
       isPgOp_ = isPgOp;
       pgOpts_ = opts;
+      Sched_ = XrdOssIntegrity::Sched_;
+      job_.Init(file, this, successor, isPgOp, isread);
    }
 
    static XrdOssIntegrityFileAio *Alloc(XrdOssIntegrityFileAioStore *store)
@@ -147,6 +169,17 @@ virtual void          Recycle()
       return p;
    }
 
+   int SchedWriteJob()
+   {
+      Sched_->Schedule((XrdJob *)&job_);
+      return 0;
+   }
+
+   void SchedReadJob()
+   {
+      Sched_->Schedule((XrdJob *)&job_);
+   }
+
    XrdOssIntegrityFileAio(XrdOssIntegrityFileAioStore *store) : store_(store) { }
    ~XrdOssIntegrityFileAio() { }
 
@@ -155,11 +188,83 @@ private:
    XrdSfsAio *successor_;
    XrdOssIntegrityFile *file_;
    bool isPgOp_;
-   uint64_t pgOpts_;
+   XrdOssIntegrityFileAioJob job_;
+   XrdScheduler *Sched_;
    XrdOssIntegrityFileAio *next_;
-
-   static std::mutex recycleMtx_;
-   static XrdOssIntegrityFileAio *recycleList_;
 };
+
+void XrdOssIntegrityFileAioJob::DoItRead()
+{
+   // this job runs after async Read
+   ssize_t puret;
+   if (pg_)
+   {
+      puret = fp_->pages_->FetchRange(fp_->successor_,
+                                      (void *)nio_->sfsAio.aio_buf,
+                                      (off_t)nio_->sfsAio.aio_offset,
+                                      (size_t)nio_->Result,
+                                      (uint32_t*)nio_->cksVec,
+                                      nio_->pgOpts_,
+                                      nio_->rg_);
+   }
+   else
+   {
+      puret = fp_->pages_->VerifyRange(fp_->successor_,
+                                       (void *)nio_->sfsAio.aio_buf,
+                                       (off_t)nio_->sfsAio.aio_offset,
+                                       (size_t)nio_->Result,
+                                       nio_->rg_);
+   }
+   if (puret<0)
+   {
+      aiop_->Result = puret;
+   }
+   if (puret != aiop_->Result)
+   {
+      aiop_->Result = -EIO;
+   }
+   nio_->rg_.ReleaseAll();
+   aiop_->doneRead();
+}
+
+void XrdOssIntegrityFileAioJob::DoItWrite()
+{
+   // this job runs before async Write
+   int puret;
+   if (pg_) {
+      puret = fp_->pages_->StoreRange(fp_->successor_,
+                                      (const void *)aiop_->sfsAio.aio_buf, (off_t)aiop_->sfsAio.aio_offset,
+                                      (size_t)aiop_->sfsAio.aio_nbytes, (uint32_t*)aiop_->cksVec, nio_->rg_);
+
+   }
+   else
+   {
+      puret = fp_->pages_->UpdateRange(fp_->successor_,
+                                       (const void *)aiop_->sfsAio.aio_buf, (off_t)aiop_->sfsAio.aio_offset,
+                                       (size_t)aiop_->sfsAio.aio_nbytes, nio_->rg_);
+   }
+   if (puret<0)
+   {
+      nio_->rg_.ReleaseAll();
+      fp_->resyncSizes();
+      aiop_->Result = puret;
+      aiop_->doneWrite();
+      nio_->Recycle();
+      return;
+   }
+
+   const int ret = fp_->successor_->Write(nio_);
+   if (ret<0)
+   {
+      nio_->rg_.ReleaseAll();
+      fp_->resyncSizes();
+      aiop_->Result = ret;
+      aiop_->doneWrite();
+      nio_->Recycle();
+      return;
+   }
+
+   return;
+}
 
 #endif
