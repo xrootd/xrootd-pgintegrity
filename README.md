@@ -6,27 +6,25 @@ XrdPfc
 
 Modified XrdPfc (Xcache) to extend use of pgRead & pgWrite:
 
-Xcache is modified so that pgRead is used to fetch data from the origin
-server in order to cache it. Once XrdCl supports the method this should
-bring the benefit for non-TLS connections of the integrity check done
-by the client using per-page CRC values.
+The Xcache module has been modified so that pgRead is used to fetch
+data from the origin server in order to cache it. Once XrdCl supports the
+method this should bring the benefit for non-TLS connections of the
+integrity check done by the client using per-page CRC values.
 
 Data is passed to the cache's file system along with the per-page checksum
 values by using pgWrite, allowing a file system featuring XRDOSS_HASFSCS
 to store those values without recalculation.
 
-On subsequent read from the cache, errors which indicate checksum mismatch, or
-related errors from a filesystem featuring XRDOSS_HASFSCS, will make
-the cache treat the specific cache-block as missing. It will be fetched
+On subsequent read from the cache, errors which indicate checksum mismatch
+will make the cache treat the specific cache-block as missing. It will be fetched
 from the origin server in the usual way for a cache miss.
 
 XrdOssIntegrity
 ===============
 
 A stackable Oss plugin that adds the filesystem checksum (XRDOSS_HASFSCS)
-feature to an Oss by storing per-page CRC32C values as a separate file as
-well as the data file. Write() and Read() calls update or check against
-the stored CRC32C values.
+feature to an Oss by storing per-page CRC32C values as a separate file.
+Write() and Read() calls update or check against the stored CRC32C values.
 
 Usage:
 ------

@@ -78,6 +78,7 @@ virtual int     Open(const char *, int, mode_t, XrdOucEnv &) override;
 virtual off_t   getMmap(void **addr) override { if (addr) *addr = 0; return 0; }
 virtual int     getFD() override { return -1; }
 
+virtual void    Flush() override;
 virtual int     Fstat(struct stat *) override;
 virtual int     Fsync() override;
 virtual int     Fsync(XrdSfsAio *) override;
@@ -135,6 +136,8 @@ virtual XrdOssDF *newDir(const char *tident) override { return (XrdOssDF *)new X
 virtual XrdOssDF *newFile(const char *tident) override { return (XrdOssDF *)new XrdOssIntegrityFile(successor_, tident, config_); }
 
 virtual int       Init(XrdSysLogger *, const char *) override { return XrdOssOK; }
+virtual int       Init(XrdSysLogger *, const char *, XrdOucEnv *) override;
+
 virtual uint64_t  Features() override { return (successor_->Features() | XRDOSS_HASFSCS); }
 
 virtual int       Unlink(const char *path, int Opts=0, XrdOucEnv *eP=0) override;
@@ -164,7 +167,6 @@ virtual        ~XrdOssIntegrity() { }
       return false;
    }
 
-   int Init(XrdSysLogger *, const char *, XrdOucEnv *);
    static XrdScheduler *Sched_;
 
 private:

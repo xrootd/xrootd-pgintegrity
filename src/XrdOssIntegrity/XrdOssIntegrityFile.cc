@@ -163,7 +163,10 @@ int XrdOssIntegrityFile::pageMapOpen(const std::string &tpath, const int Oflag, 
 
 XrdOssIntegrityFile::~XrdOssIntegrityFile()
 {
-   Close();
+   if (pages_)
+   {
+      (void)Close();
+   }
 }
 
 int XrdOssIntegrityFile::Close(long long *retsz)
@@ -173,16 +176,13 @@ int XrdOssIntegrityFile::Close(long long *retsz)
       return -EBADF;
    }
 
-   XrdOssIntegrityPages::Sizes_t sizes = pages_->TrackedSizesGet(false);
    const int cpret = pageMapClose(tpath_);
 
    pages_.reset();
    tpath_.clear();
    const int csret = successor_->Close(retsz);
    if (cpret<0) return cpret;
-   if (csret<0) return csret;
-   if (sizes.first != sizes.second) return -EIO;
-   return 0;
+   return csret;
 }
 
 int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int Oflag, XrdOucEnv &Env, std::shared_ptr<XrdOssIntegrityPages> &retpages)
@@ -521,10 +521,7 @@ int XrdOssIntegrityFile::Fsync()
    const int psret = pages_->Fsync();
    const int ssret = successor_->Fsync();
    if (psret<0) return psret;
-   if (ssret<0) return ssret;
-   XrdOssIntegrityPages::Sizes_t sizes = pages_->TrackedSizesGet(false);
-   if (sizes.first != sizes.second) return -EIO;
-   return 0;
+   return ssret;
 }
 
 int XrdOssIntegrityFile::Ftruncate(unsigned long long flen)
@@ -569,4 +566,10 @@ int XrdOssIntegrityFile::resyncSizes()
    if (ret<0) return ret;
    pages_->LockResetSizes(sbuff.st_size);
    return 0;
+}
+
+void XrdOssIntegrityFile::Flush()
+{
+   pages_->Flush();
+   successor_->Flush();
 }

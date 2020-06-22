@@ -35,7 +35,7 @@
 
 #include <vector>
 
-int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(const off_t until, const Sizes_t &sizes)
+int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, const Sizes_t &sizes)
 {
    static const uint8_t bz[XrdSys::PageSize] = {0};
    static const uint32_t crczero = XrdOucCRC::Calc32C(bz, XrdSys::PageSize, 0U);
@@ -50,10 +50,19 @@ int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(const off_t until, const Size
    // if last tracked page is before page "until" extend it
    if (tracked_off>0)
    {
-      uint32_t prevtag;
-      const ssize_t rret = ts_->ReadTags(&prevtag, tracked_page, 1);
+      if (fd == nullptr) return -EIO;
+      uint8_t b[XrdSys::PageSize];
+      ssize_t rret = XrdOssIntegrityPages::maxread(fd, b, tracked_page*XrdSys::PageSize, XrdSys::PageSize);
       if (rret < 0) return rret;
-      const uint32_t crc32c = XrdOucCRC::Calc32C(bz, XrdSys::PageSize - tracked_off, prevtag);
+      if (static_cast<size_t>(rret) < tracked_off) return -EIO;
+      const ssize_t extra = rret - tracked_off;
+      if (memcmp(bz, &b[tracked_off], extra)) return -EIO;
+      uint32_t prevtag;
+      rret = ts_->ReadTags(&prevtag, tracked_page, 1);
+      if (rret < 0) return rret;
+      uint32_t crc32c = XrdOucCRC::Calc32C(b, tracked_off, 0U);
+      if (crc32c != prevtag) return -EDOM;
+      crc32c = XrdOucCRC::Calc32C(bz, XrdSys::PageSize - tracked_off, prevtag);
       const ssize_t wret = ts_->WriteTags(&crc32c, tracked_page, 1);
       if (wret < 0) return wret;
    }
@@ -84,7 +93,7 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
    const off_t trackinglen = sizes.first;
    if (offset > trackinglen)
    {
-      const int ret = UpdateRangeHoleUntilPage(p1, sizes);
+      const int ret = UpdateRangeHoleUntilPage(fd, p1, sizes);
       if (ret<0) return ret;
    }
 
@@ -126,43 +135,34 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
          // the read-modify-write cycle. However this case is sent to the aligned version of update.
          // Therefore it is not tested and optimised for here.
 
-        if (p1 == tracked_page && tracked_off == p1_off)
-        {
-           // strictly appending: can recalc crc with new data
-           // without rereeading existing partial block's data
-           uint32_t crc32v;
-           const ssize_t rret = ts_->ReadTags(&crc32v, p1, 1);
-           if (rret<0) return rret;
-           const uint32_t crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32v);
-           hasprepage = true;
-           prepageval = crc32c;
-        }
-        else
-        {
-            // read some preexisting data and/or implied zero bytes
-            const size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
-            if (toread>0)
+         // the case (p1 == tracked_page && tracked_off == p1_off) could also be done without the
+         // read-modify-write cycle, as the previous tag cal be recalculated with extra data added. However
+         // we prefer to fail during the write, if the page content is in error, since a subsequent read
+         // will show this failure.
+
+         // read some preexisting data and/or implied zero bytes
+         const size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
+         if (toread>0)
+         {
+            ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
+            if (rret<0) return -EIO;
+            const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
+            uint32_t crc32v;
+            rret = ts_->ReadTags(&crc32v, p1, 1);
+            if (rret<0) return rret;
+            if (crc32v != crc32c)
             {
-               ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
-               if (rret<0) return -EIO;
-               const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
-               uint32_t crc32v;
-               rret = ts_->ReadTags(&crc32v, p1, 1);
-               if (rret<0) return rret;
-               if (crc32v != crc32c)
-               {
-                  return -EDOM;
-               }
+               return -EDOM;
             }
-            if (p1_off > toread)
-            {
-               memset(&b[toread], 0, p1_off-toread);
-            }
-            memcpy(&b[p1_off], buff, bavail);
-            const uint32_t crc32c = XrdOucCRC::Calc32C(b, std::max(p1_off+bavail, toread), 0U);
-            hasprepage = true;
-            prepageval = crc32c;
          }
+         if (p1_off > toread)
+         {
+            memset(&b[toread], 0, p1_off-toread);
+         }
+         memcpy(&b[p1_off], buff, bavail);
+         const uint32_t crc32c = XrdOucCRC::Calc32C(b, std::max(p1_off+bavail, toread), 0U);
+         hasprepage = true;
+         prepageval = crc32c;
       }
    }
 

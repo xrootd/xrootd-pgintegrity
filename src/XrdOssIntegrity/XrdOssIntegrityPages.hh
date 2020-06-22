@@ -52,6 +52,7 @@ public:
 
    int UpdateRange(XrdOssDF *, const void *, off_t, size_t, XrdOssIntegrityRangeGuard&);
    ssize_t VerifyRange(XrdOssDF *, const void *, off_t, size_t, XrdOssIntegrityRangeGuard&);
+   void Flush() { ts_->Flush(); }
    int Fsync() { return ts_->Fsync(); }
 
    ssize_t FetchRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssIntegrityRangeGuard&);
@@ -77,13 +78,20 @@ protected:
 
    int UpdateRangeAligned(const void *, off_t, size_t, const Sizes_t &);
    int UpdateRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
-   int UpdateRangeHoleUntilPage(off_t, const Sizes_t &);
+   int UpdateRangeHoleUntilPage(XrdOssDF *, off_t, const Sizes_t &);
    ssize_t VerifyRangeAligned(const void *, off_t, size_t, const Sizes_t &);
    ssize_t VerifyRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
    ssize_t FetchRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
    int StoreRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *);
 
    static ssize_t fullread(XrdOssDF *fd, void *buff, const off_t off , const size_t sz)
+   {
+      ssize_t rret = maxread(fd, buff, off, sz);
+      if (static_cast<size_t>(rret) != sz) return -EIO;
+      return rret;
+   }
+
+   static ssize_t maxread(XrdOssDF *fd, void *buff, const off_t off , const size_t sz)
    {
       size_t toread = sz, nread = 0;
       uint8_t *p = (uint8_t*)buff;
@@ -95,7 +103,6 @@ protected:
          toread -= rret;
          nread += rret;
       }
-      if (nread != sz) return -EIO;
       return nread;
    }
 

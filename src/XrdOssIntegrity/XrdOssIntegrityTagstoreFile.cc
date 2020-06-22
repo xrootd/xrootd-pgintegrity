@@ -67,13 +67,11 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    uint32_t magic;
    const uint32_t cmagic = 0x54445258U;
 
-   uint8_t thead[16];
-
-   const int mread = XrdOssIntegrityTagstoreFile::fullread(*fd_, thead, 0, 16);
+   const int mread = XrdOssIntegrityTagstoreFile::fullread(*fd_, header_, 0, 16);
    bool mok = false;
    if (mread >= 0)
    {
-      memcpy(&magic, thead, 4);
+      memcpy(&magic, header_, 4);
       if (magic == cmagic)
       {
          fileIsBige_ = machineIsBige_;
@@ -89,7 +87,8 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    if (!mok)
    {
       fileIsBige_ = machineIsBige_;
-      const ssize_t wret = XrdOssIntegrityTagstoreFile::fullwrite(*fd_, &cmagic,0,4);
+      memcpy(header_,&cmagic,4);
+      const ssize_t wret = XrdOssIntegrityTagstoreFile::fullwrite(*fd_,header_,0,4);
       if (wret<0) return wret;
       const int stret = WriteTrackedTagSize(0);
       if (stret<0) return stret;
@@ -97,7 +96,7 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    else
    {
       uint64_t pb;
-      memcpy(&pb, &thead[4], 8);
+      memcpy(&pb, &header_[4], 8);
       if (fileIsBige_ == machineIsBige_)
       {
          trackinglen_ = pb;
@@ -106,9 +105,9 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
       {
          trackinglen_ = bswap_64(pb);
       }
-      const uint32_t cv = XrdOucCRC::Calc32C(&pb, 8, 0U);
+      const uint32_t cv = XrdOucCRC::Calc32C(header_, 12, 0U);
       uint32_t rv;
-      memcpy(&rv, &thead[12], 4);
+      memcpy(&rv, &header_[12], 4);
       if (fileIsBige_ != machineIsBige_) rv = bswap_32(rv);
       if (rv != cv)
       {
@@ -154,13 +153,17 @@ int XrdOssIntegrityTagstoreFile::Fsync()
    return fd_->Fsync();
 }
 
+void XrdOssIntegrityTagstoreFile::Flush()
+{
+   if (!isOpen) return;
+   fd_->Flush();
+}
+
 int XrdOssIntegrityTagstoreFile::Close()
 {
    if (!isOpen) return -EBADF;
-   long long isz;
-   int ret = fd_->Close(&isz);
-   if (ret == 0) isOpen = false;
-   return ret;
+   isOpen = false;
+   return fd_->Close();
 }
 
 ssize_t XrdOssIntegrityTagstoreFile::WriteTags(const uint32_t *const buf, const off_t off, const size_t n)

@@ -305,7 +305,7 @@ int XrdOssIntegrityPages::StoreRangeAligned(const void *const buff, const off_t 
 
    if (offset > trackinglen)
    {
-      const int ret = UpdateRangeHoleUntilPage(p1, sizes);
+      const int ret = UpdateRangeHoleUntilPage(nullptr, p1, sizes);
       if (ret<0) return ret;
    }
 
@@ -365,7 +365,7 @@ int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIn
 
    if (len>trackinglen)
    {
-      int ret = UpdateRangeHoleUntilPage(p_until,sizes);
+      int ret = UpdateRangeHoleUntilPage(fd,p_until,sizes);
       if (ret<0) return ret;
    }
 

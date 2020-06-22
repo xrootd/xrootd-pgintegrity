@@ -1,3 +1,34 @@
+/******************************************************************************/
+/*                                                                            */
+/*                X r d O s s I n t e g r i t y . c c                         */
+/*                                                                            */
+/* (C) Copyright 2020 CERN.                                                   */
+/*                                                                            */
+/* This file is part of the XRootD software suite.                            */
+/*                                                                            */
+/* XRootD is free software: you can redistribute it and/or modify it under    */
+/* the terms of the GNU Lesser General Public License as published by the     */
+/* Free Software Foundation, either version 3 of the License, or (at your     */
+/* option) any later version.                                                 */
+/*                                                                            */
+/* In applying this licence, CERN does not waive the privileges and           */
+/* immunities granted to it by virtue of its status as an Intergovernmental   */
+/* Organization or submit itself to any jurisdiction.                         */
+/*                                                                            */
+/* XRootD is distributed in the hope that it will be useful, but WITHOUT      */
+/* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or      */
+/* FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public       */
+/* License for more details.                                                  */
+/*                                                                            */
+/* You should have received a copy of the GNU Lesser General Public License   */
+/* along with XRootD in a file called COPYING.LESSER (LGPL license) and file  */
+/* COPYING (GPL license).  If not, see <http://www.gnu.org/licenses/>.        */
+/*                                                                            */
+/* The copyright holder's institutional names and contributor's names may not */
+/* be used to endorse or promote products derived from this software without  */
+/* specific prior written permission of the institution or contributor.       */
+/******************************************************************************/
+
 #include "XrdOss/XrdOss.hh"
 #include "XrdOss/XrdOssDefaultSS.hh"
 #include "XrdOuc/XrdOucEnv.hh"
@@ -177,22 +208,23 @@ TEST_F(ossintegrity_pageTest,pagewithholefilled) {
   ASSERT_TRUE(csvec[0] == 0x353125d0);
 }
 
-TEST_F(ossintegrity_pageTest,extendtotwo) {
-  ssize_t ret = m_file->Write(m_b, 0, 2047);
-  ASSERT_TRUE(ret == 2047);
-  ret = m_file->Write(&m_b[4096], 4096, 2049);
+TEST_F(ossintegrity_pageTest,extendtothree) {
+  ssize_t ret = m_file->Write(m_b, 0, 6143);
+  ASSERT_TRUE(ret == 6143);
+  ret = m_file->Write(&m_b[8192], 8192, 2049);
   ASSERT_TRUE(ret == 2049);
-  uint8_t rbuf[8192];
-  uint32_t csvec[2];
-  ret = m_file->pgRead(rbuf, 0, 8192, csvec, XrdOssDF::Verify);
-  ASSERT_TRUE(ret == 6145);
-  uint8_t cbuf[6145];
-  memcpy(cbuf, m_b, 2047);
-  memset(&cbuf[2047],0,2049);
-  memcpy(&cbuf[4096],&m_b[4096],2049);
-  ASSERT_TRUE( memcmp(rbuf,cbuf,6145)==0);
-  ASSERT_TRUE(csvec[0] == 0xe7625dd6);
-  ASSERT_TRUE(csvec[1] == 0x3e455e47);
+  uint8_t rbuf[12288];
+  uint32_t csvec[3];
+  ret = m_file->pgRead(rbuf, 0, 12288, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 10241);
+  uint8_t cbuf[10241];
+  memcpy(cbuf, m_b, 6143);
+  memset(&cbuf[6143],0,2049);
+  memcpy(&cbuf[8192],&m_b[8192],2049);
+  ASSERT_TRUE( memcmp(rbuf,cbuf,10241)==0);
+  ASSERT_TRUE(csvec[0] == 0x353125d0);
+  ASSERT_TRUE(csvec[1] == 0xff4f5c4d);
+  ASSERT_TRUE(csvec[2] == 0x3f769559);
 }
 
 TEST_F(ossintegrity_pageTest,threepartial) {

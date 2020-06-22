@@ -67,8 +67,9 @@ virtual ssize_t WriteV(XrdOucIOVec *writeV, int n) override { return successor_-
                 // Methods common to both
 virtual int     Close(long long *retsz=0) override { return successor_->Close(retsz); }
 virtual int     Fctl(int cmd, int alen, const char *args, char **resp=0) override { return successor_->Fctl(cmd, alen, args, resp); }
+virtual const char     *getTID() override { return successor_->getTID(); }
 
-                XrdOssDFHandler(XrdOssDF *successor) : successor_(successor) { }
+                XrdOssDFHandler(XrdOssDF *successor) : XrdOssDF(successor->getTID(), successor->DFType(), successor->getFD()), successor_(successor) { }
 virtual        ~XrdOssDFHandler() { delete successor_; }
 
 protected:
@@ -95,6 +96,7 @@ virtual int       FSctl(int cmd, int alen, const char *args, char **resp=0) over
 
 // derived class must provide its own
 // virtual int       Init(XrdSysLogger *, const char *)=0;
+// virtual int       Init(XrdSysLogger *lp, const char *cfn, XrdOucEnv *envP) {return Init(lp, cfn);}
 virtual int       Mkdir(const char *path, mode_t mode, int mkpath=0, XrdOucEnv *envP=0) override { return successor_->Mkdir(path, mode, mkpath, envP); }
 
 virtual int       Reloc(const char *tident, const char *path,

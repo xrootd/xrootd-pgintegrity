@@ -48,6 +48,7 @@ public:
    virtual int Open(const char *, off_t, int, XrdOucEnv &) override;
    virtual int Close() override;
 
+   virtual void Flush() override;
    virtual int Fsync() override;
 
    virtual ssize_t WriteTags(const uint32_t *, off_t, size_t) override;
@@ -121,6 +122,7 @@ private:
    bool isOpen;
    bool machineIsBige_;
    bool fileIsBige_;
+   uint8_t header_[16];
 
    ssize_t WriteTags_swap(const uint32_t *, off_t, size_t);
    ssize_t ReadTags_swap(uint32_t *, off_t, size_t);
@@ -130,12 +132,11 @@ private:
       if (!isOpen) return -EBADF;
       uint64_t x = size;
       if (fileIsBige_ != machineIsBige_) x = bswap_64(x);
-      uint8_t wbuf[12];
-      memcpy(wbuf, &x, 8);
-      uint32_t cv = XrdOucCRC::Calc32C(&x, 8, 0U);
+      memcpy(&header_[4], &x, 8);
+      uint32_t cv = XrdOucCRC::Calc32C(header_, 12, 0U);
       if (machineIsBige_ != fileIsBige_) cv = bswap_32(cv);
-      memcpy(&wbuf[8], &cv, 4);
-      ssize_t wret = fullwrite(*fd_, wbuf, 4, 12);
+      memcpy(&header_[12], &cv, 4);
+      ssize_t wret = fullwrite(*fd_, &header_[4], 4, 12);
       if (wret<0) return wret;
       trackinglen_ = size;
       return 0;

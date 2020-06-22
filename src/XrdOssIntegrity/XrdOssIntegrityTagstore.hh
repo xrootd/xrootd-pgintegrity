@@ -42,6 +42,7 @@ public:
    virtual int Open(const char *, off_t, int, XrdOucEnv &)=0;
    virtual int Close()=0;
 
+   virtual void Flush()=0;
    virtual int Fsync()=0;
 
    virtual ssize_t WriteTags(const uint32_t *, off_t, size_t)=0;
