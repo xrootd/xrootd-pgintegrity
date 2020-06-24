@@ -101,6 +101,8 @@ public:
          successor_->doneWrite();
          return;
       }
+      // in case there was a short write during the async write, finish
+      // writing the data now, otherwise the crc values will be inconsistent
       ssize_t towrite = this->sfsAio.aio_nbytes - this->Result;
       ssize_t nwritten = this->Result;
       const char *p = (const char*)this->sfsAio.aio_buf;
@@ -118,6 +120,7 @@ public:
          towrite -= wret;
          nwritten += wret;
       }
+      successor_->Result = nwritten;
       rg_.ReleaseAll();
       successor_->doneWrite();
    }
