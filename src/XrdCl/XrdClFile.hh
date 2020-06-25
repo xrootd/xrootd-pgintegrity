@@ -218,7 +218,8 @@ namespace XrdCl
       //! @param size    buffer size, at least 1 page big (4KB)
       //! @param buffer    a pointer to a buffer big enough to hold the data
       //! @param bytesRead number of bytes actually read
-      //! @param cksums    crc32c checksum for each read 4KB page
+      //! @param cksums    crc32c checksum for each read 4KB page, if the server
+      //!                  can not supply the checksums the vector may be empty
       //! @param timeout   timeout value, if 0 the environment default will be
       //!                  used
       //! @return          status of the operation

@@ -31,6 +31,7 @@
 #include "XrdCl/XrdClUglyHacks.hh"
 #include "XrdCl/XrdClRedirectorRegistry.hh"
 #include "XrdCl/XrdClXRootDTransport.hh"
+#include "XrdCl/XrdClMessage.hh"
 
 #include "XrdSys/XrdSysPthread.hh"
 
@@ -303,6 +304,31 @@ namespace XrdCl
                               time_t                expires )
 
   {
+    ClientRequestHdr *hdr = (ClientRequestHdr*)msg->GetBuffer();
+    switch( ntohs(hdr->requestid) )
+    {
+      case kXR_pgread:
+        AnyObject  qryResult;
+
+        // assumes the transport is XRootD; otherwise it will not
+        // support the query
+        Status sc = QueryTransport(XRootDQuery::ServerFlags, qryResult);
+
+        if( !sc.IsOK() )
+          return sc;
+
+        // tansport query results never own their value
+        std::unique_ptr<int> qryVal;
+        {
+          int *v=0;
+          qryResult.Get( v );
+          qryVal.reset(v);
+        }
+        if (!((*qryVal) & kXR_suppgrw))
+          return XRootDStatus( stError, errNotSupported );
+        break;
+    }
+
     return pStream->Send( msg, handler, stateful, expires );
   }
 

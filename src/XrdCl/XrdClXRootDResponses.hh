@@ -898,6 +898,22 @@ namespace XrdCl
     void     *buffer; //! optional buffer pointer
   };
 
+  class PgReadInfo
+  {
+    public:
+      const ChunkInfo &GetChunk() const { return pChunkInfo; }
+
+      ChunkInfo &GetChunk() { return pChunkInfo; }
+
+      std::vector<uint32_t> &GetCKSums() { return pCksums; }
+
+      const std::vector<uint32_t> &GetCKSums() const { return pCksums; }
+
+    private:
+      std::vector<uint32_t> pCksums;
+      ChunkInfo pChunkInfo;
+  };
+
   //----------------------------------------------------------------------------
   //! List of chunks
   //----------------------------------------------------------------------------

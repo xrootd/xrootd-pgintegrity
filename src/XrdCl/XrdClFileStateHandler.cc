@@ -39,6 +39,8 @@
 #include "XrdCl/XrdClUglyHacks.hh"
 #include "XrdClRedirectorRegistry.hh"
 
+#include "XrdOuc/XrdOucCRC.hh"
+
 #include <sstream>
 #include <memory>
 #include <sys/time.h>
@@ -46,6 +48,61 @@
 
 namespace
 {
+  //----------------------------------------------------------------------------
+  // Object that passes control back to the FileStateHandler when kXR_pgread
+  // returns
+  //----------------------------------------------------------------------------
+  class PgReadHandler: public XrdCl::ResponseHandler
+  {
+    public:
+      //------------------------------------------------------------------------
+      // Constructor
+      //------------------------------------------------------------------------
+      PgReadHandler( XrdCl::FileStateHandler *stateHandler,
+                     XrdCl::ResponseHandler  *userHandler,
+                     std::vector<uint32_t> &allSums,
+                     uint32_t totalreadsize,
+                     int nresume,
+                     bool plainread,
+                     uint64_t offset, uint32_t size,
+                     void *buffer, uint16_t timeout):
+        pStateHandler( stateHandler ), pUserHandler( userHandler ),
+        pAllSums( std::move(allSums) ), pTotalReadSize( totalreadsize ),
+        pNResume(nresume), pPlainRead( plainread ), pOffset( offset ),
+        pSize( size ), pBuffer( buffer ), pTimeout( timeout )
+      {
+      }
+
+      //------------------------------------------------------------------------
+      // Handle the response
+      //------------------------------------------------------------------------
+      virtual void HandleResponseWithHosts( XrdCl::XRootDStatus *status,
+                                            XrdCl::AnyObject    *response,
+                                            XrdCl::HostList     *hostList )
+      {
+        using namespace XrdCl;
+
+        pStateHandler->PgReadResume(status, response, hostList, pAllSums,
+                                    pTotalReadSize, pNResume+1, pPlainRead,
+                                    pOffset, pSize, pBuffer, pUserHandler,
+                                    pTimeout);
+        delete this;
+        return;
+      }
+
+    private:
+      XrdCl::FileStateHandler *pStateHandler;
+      XrdCl::ResponseHandler  *pUserHandler;
+      std::vector<uint32_t> pAllSums;
+      uint32_t pTotalReadSize;
+      int      pNResume;
+      bool     pPlainRead;
+      uint64_t pOffset;
+      uint32_t pSize;
+      void    *pBuffer;
+      uint16_t pTimeout;
+  };
+
   //----------------------------------------------------------------------------
   // Object that does things to the FileStateHandler when kXR_open returns
   // and then calls the user handler
@@ -661,6 +718,274 @@ namespace XrdCl
     StatefulHandler *stHandler = new StatefulHandler( this, handler, msg, params );
 
     return SendOrQueue( *pDataServer, msg, stHandler, params );
+  }
+
+  //----------------------------------------------------------------------------
+  // Read a data chunk at a given offset with checkums - async
+  //----------------------------------------------------------------------------
+  XRootDStatus FileStateHandler::PgRead( uint64_t         offset,
+                                         uint32_t         size,
+                                         void            *buffer,
+                                         ResponseHandler *handler,
+                                         uint16_t         timeout )
+  {
+    XrdSysMutexHelper scopedLock( pMutex );
+
+    if( pFileState != Opened && pFileState != Recovering )
+      return XRootDStatus( stError, errInvalidOp );
+
+    if ((offset % XrdProto::kXR_pgPageSZ) != 0 || (size % XrdProto::kXR_pgPageSZ) != 0)
+      return XRootDStatus( stError, errInvalidArgs );
+
+    Log *log = DefaultEnv::GetLog();
+    log->Debug( FileMsg, "[0x%x@%s] Sending a pgread command for handle 0x%x to "
+                "%s", this, pFileUrl->GetURL().c_str(),
+                *((uint32_t*)pFileHandle), pDataServer->GetHostId().c_str() );
+
+    Message             *msg;
+    ClientPgReadRequest *req;
+    MessageUtils::CreateRequest( msg, req );
+
+    req->requestid  = kXR_pgread;
+    req->offset     = offset;
+    req->rlen       = size;
+    memcpy( req->fhandle, pFileHandle, 4 );
+
+    ChunkList *list   = new ChunkList();
+    list->push_back( ChunkInfo( offset, size, buffer ) );
+
+    XRootDTransport::SetDescription( msg );
+    MessageSendParams params;
+    params.timeout         = timeout;
+    params.followRedirects = false;
+    params.stateful        = true;
+    params.chunkList       = list;
+    MessageUtils::ProcessSendParams( params );
+
+    std::vector<uint32_t> allSums;
+    PgReadHandler *pgHandler = new PgReadHandler( this, handler, allSums, 0, 0, false,
+                                                  offset, size, buffer, timeout );
+
+    StatefulHandler *stHandler = new StatefulHandler( this, pgHandler, msg, params );
+
+    Status st = SendOrQueue( *pDataServer, msg, stHandler, params );
+    if (!st.IsOK())
+    {
+      scopedLock.UnLock();
+      pgHandler->HandleResponseWithHosts(new XRootDStatus(st), 0, 0);
+      return Status();
+    }
+    return st;
+  }
+
+  //------------------------------------------------------------------------
+  // Used to check, fallback or refetch corrupt pages during PgRead()
+  //------------------------------------------------------------------------
+  void FileStateHandler::PgReadResume( XrdCl::XRootDStatus *status,
+                                       XrdCl::AnyObject    *response,
+                                       XrdCl::HostList     *hostList,
+                                       std::vector<uint32_t> &allSums,
+                                       uint32_t             totalreadsize,
+                                       int                  nresume,
+                                       bool                 plainread,
+                                       uint64_t             offset,
+                                       uint32_t             size,
+                                       void                *buffer,
+                                       ResponseHandler     *handler,
+                                       uint16_t             timeout )
+  {
+    if( !status->IsOK() )
+    {
+      if (!plainread && status->code == errNotSupported)
+      {
+        delete status;
+        delete response;
+        delete hostList;
+
+        PgReadHandler *pgHandler =
+              new PgReadHandler( this, handler, allSums, 0, 0,
+                                 true, offset, size, buffer, timeout );
+
+        Status st = Read(offset, size, buffer, pgHandler, timeout);
+        if (!st.IsOK())
+        {
+          pgHandler->HandleResponseWithHosts(new XRootDStatus(st), 0, 0);
+        }
+        return;
+      }
+
+      handler->HandleResponseWithHosts( status, response, hostList );
+      return;
+    }
+
+    // read completed, if it was plain Read (for backwards compatability)
+    // it needs to be converted to a PgReadInfo retsult and possibly have
+    // CRC32C values calculated.
+    if (plainread)
+    {
+      ChunkInfo *retChunk = 0;
+      response->Get( retChunk );
+      std::unique_ptr<PgReadInfo> info(new PgReadInfo());
+      if (retChunk)
+      {
+        info->GetChunk() = *retChunk;
+      }
+
+      bool *hasde = 0;
+      {
+        XrdSysMutexHelper scopedLock( pMutex );
+        if( pFileState == Opened )
+        {
+          AnyObject  qryResult;
+          Status sc = DefaultEnv::GetPostMaster()->QueryTransport( *pDataServer, XRootDQuery::HasDataEncryption, qryResult );
+          if (sc.IsOK())
+            qryResult.Get( hasde );
+        }
+      }
+
+      if (hasde && *hasde == true)
+      {
+        std::vector<uint32_t> &cksums = info->GetCKSums();
+        cksums.resize( (retChunk->length + XrdProto::kXR_pgPageSZ - 1)/XrdProto::kXR_pgPageSZ );
+        XrdOucCRC::Calc32C(retChunk->buffer, retChunk->length, &cksums[0]);
+      }
+      response->Set( info.release() );
+      delete hasde;
+      delete retChunk;
+      handler->HandleResponseWithHosts( status, response, hostList );
+      return;
+    }
+
+    // if this was a page reread merge in new checksum
+    PgReadInfo *pgReadInfo=0;
+    response->Get( pgReadInfo );
+
+    if (!pgReadInfo)
+    {
+      handler->HandleResponseWithHosts( status, response, hostList );
+      return;
+    }
+
+    uint64_t coffset = pgReadInfo->GetChunk().offset;
+    uint32_t cread = pgReadInfo->GetChunk().length;
+    std::vector<uint32_t> &cksums = pgReadInfo->GetCKSums();
+    bool HasReplaced = false;
+    int replaceIdx = -1;
+    int nreplaced = 0;
+
+    if (allSums.empty())
+    {
+      allSums = std::move(cksums);
+      totalreadsize = cread;
+    }
+    else
+    {
+      HasReplaced = true;
+      nreplaced = (cread + XrdProto::kXR_pgPageSZ -1) / XrdProto::kXR_pgPageSZ;
+      replaceIdx = (coffset - offset)/XrdProto::kXR_pgPageSZ;
+
+      for(int n=0;n<nreplaced;++n)
+        allSums[replaceIdx+n] = cksums[n];
+
+      if (cread>0)
+        totalreadsize = std::max(totalreadsize, uint32_t(coffset+cread - offset));
+    }
+
+    // check all checksums against data, find first mismatch
+    uint32_t mismatchval;
+    const int iverfIdx = XrdOucCRC::Ver32C(buffer, totalreadsize, &allSums[0], mismatchval);
+
+    if (iverfIdx<0)
+    {
+      // all good!
+      pgReadInfo->GetChunk() = ChunkInfo( offset, totalreadsize, buffer );
+      pgReadInfo->GetCKSums() = std::move(allSums);
+      handler->HandleResponseWithHosts( status, response, hostList );
+      return;
+    }
+
+    int nmismatched = 1;
+    int nmax = (totalreadsize+XrdProto::kXR_pgPageSZ-1)/XrdProto::kXR_pgPageSZ;
+    while(iverfIdx+nmismatched < nmax)
+    {
+      uint32_t idx = XrdProto::kXR_pgPageSZ * (iverfIdx+nmismatched);
+      char *p = (char *)buffer;
+      const int iv = XrdOucCRC::Ver32C(&p[idx], totalreadsize-idx, &allSums[iverfIdx+nmismatched], mismatchval);
+      if (iv<0) break;
+      nmismatched++;
+    }
+
+    delete status;
+    delete response;
+    delete hostList;
+    status = 0;
+    response = 0;
+    hostList = 0;
+    pgReadInfo = 0;
+
+    if (HasReplaced && (nreplaced==0 || 
+           (replaceIdx <= iverfIdx+nmismatched-1 && iverfIdx <= replaceIdx+nreplaced-1)))
+    {
+      // no replacement fetched or some of the replacement block(s) also had error
+      status = new XRootDStatus( stError, errCheckSumError );
+      handler->HandleResponseWithHosts( status, 0, 0 );
+      return;
+    }
+
+    XrdSysMutexHelper scopedLock( pMutex );
+
+    if( pFileState != Opened && pFileState != Recovering )
+    {
+      scopedLock.UnLock();
+      XRootDStatus *status = new XRootDStatus( stError, errInvalidOp );
+      handler->HandleResponseWithHosts( status, 0, 0 );
+      return;
+    }
+
+    Message             *msg;
+    ClientPgReadRequest *req;
+    MessageUtils::CreateRequest( msg, req, sizeof(ClientPgReadReqArgs) );
+
+    req->requestid         = kXR_pgread;
+    req->offset            = offset + XrdProto::kXR_pgPageSZ*iverfIdx;
+    req->rlen              = XrdProto::kXR_pgPageSZ*nmismatched;
+    req->dlen              = sizeof(ClientPgReadReqArgs);
+    memcpy( req->fhandle, pFileHandle, 4 );
+
+    ClientPgReadReqArgs *args = (ClientPgReadReqArgs *)msg->GetBuffer(sizeof(ClientPgReadRequest));
+    args->reqflags            = XrdProto::kXR_pgRetry;
+
+    msg->Append((char *)args, sizeof(ClientPgReadReqArgs), sizeof(ClientPgReadRequest));
+
+    ChunkList *list        = new ChunkList();
+    char *p                = (char *)buffer;
+    p                     += XrdProto::kXR_pgPageSZ*iverfIdx;
+
+    list->push_back( ChunkInfo( req->offset, req->rlen, p ) );
+
+    XRootDTransport::SetDescription( msg );
+    MessageSendParams params;
+    params.timeout         = timeout;
+    params.followRedirects = false;
+    params.stateful        = true;
+    params.chunkList       = list;
+    MessageUtils::ProcessSendParams( params );
+
+    PgReadHandler *pgHandler = new PgReadHandler( this, handler, allSums, totalreadsize,
+                                                  nresume, false, offset, size, buffer,
+                                                  timeout );
+
+    StatefulHandler *stHandler = new StatefulHandler( this, pgHandler, msg, params );
+
+    Status st = SendOrQueue( *pDataServer, msg, stHandler, params );
+    if (!st.IsOK())
+    {
+      delete pgHandler;
+      scopedLock.UnLock();
+      XRootDStatus *status = new XRootDStatus( st );
+      handler->HandleResponseWithHosts( status, 0, 0 );
+      return;
+    }
   }
 
   //----------------------------------------------------------------------------

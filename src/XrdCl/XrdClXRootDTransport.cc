@@ -35,6 +35,7 @@
 #include "XrdNet/XrdNetAddr.hh"
 #include "XrdNet/XrdNetUtils.hh"
 #include "XrdSys/XrdSysPlatform.hh"
+#include "XrdOuc/XrdOucCRC.hh"
 #include "XrdOuc/XrdOucErrInfo.hh"
 #include "XrdOuc/XrdOucUtils.hh"
 #include "XrdSys/XrdSysTimer.hh"
@@ -306,13 +307,51 @@ namespace XrdCl
         leftToBeRead -= bytesRead;
         message->AdvanceCursor( bytesRead );
       }
+      ServerResponseHeader *header = (ServerResponseHeader *)message->GetBuffer();
+      if (ntohs(header->status) != kXR_status)
+      {
+        UnMarshallHeader( message );
+        uint32_t bodySize = header->dlen;
+        Log *log = DefaultEnv::GetLog();
+        log->Dump( XRootDTransportMsg, "[msg: 0x%x] Expecting %d bytes of message "
+                   "body", message, bodySize );
+
+        return Status( stOK, suDone );
+      }
+    }
+    ServerResponseStatus *srsp = (ServerResponseStatus *)message->GetBuffer();
+    const uint32_t bs = ntohl(srsp->hdr.dlen);
+    const uint16_t st = ntohs(srsp->hdr.status);
+    if (st == kXR_status && message->GetCursor() < bs+8)
+    {
+      if( message->GetCursor() == 8 && message->GetSize() < bs+8 )
+        message->ReAllocate( bs+8 );
+
+      srsp = (ServerResponseStatus *)message->GetBuffer();
+
+      size_t leftToBeRead = bs+8 - message->GetCursor();
+      while( leftToBeRead )
+      {
+        int bytesRead = 0;
+        Status status = socket->Read( message->GetBufferAtCursor(), leftToBeRead, bytesRead );
+
+        if( !status.IsOK() || status.code == suRetry )
+          return status;
+
+        leftToBeRead -= bytesRead;
+        message->AdvanceCursor( bytesRead );
+      }
+      if (!socket->IsEncrypted())
+      {
+        Status status = CheckStatusIntegrity( message );
+        if ( !status.IsOK() )
+          return status;
+      }
       UnMarshallHeader( message );
-
-      uint32_t bodySize = *(uint32_t*)(message->GetBuffer(4));
+      uint32_t bodySize = srsp->bdy.dlen;
       Log *log = DefaultEnv::GetLog();
-      log->Dump( XRootDTransportMsg, "[msg: 0x%x] Expecting %d bytes of message "
+      log->Dump( XRootDTransportMsg, "[msg: 0x%x] Expecting %d bytes of status message "
                  "body", message, bodySize );
-
       return Status( stOK, suDone );
     }
     return Status( stError, errInternal );
@@ -327,10 +366,22 @@ namespace XrdCl
     // Retrieve the body
     //--------------------------------------------------------------------------
     size_t   leftToBeRead = 0;
-    uint32_t bodySize = *(uint32_t*)(message->GetBuffer(4));
-
-    if( message->GetCursor() == 8 )
-      message->ReAllocate( bodySize + 8 );
+    uint32_t bodySize;
+    {
+      ServerResponseStatus *srsp = (ServerResponseStatus *)message->GetBuffer();
+      bodySize = srsp->hdr.dlen;
+      if (srsp->hdr.status == kXR_status)
+      {
+        bodySize += srsp->bdy.dlen;
+        if ( message->GetCursor() == srsp->hdr.dlen + 8U)
+          message->ReAllocate( bodySize + 8 );
+      }
+      else
+      {
+        if( message->GetCursor() == 8 )
+          message->ReAllocate( bodySize + 8 );
+      }
+    }
 
     leftToBeRead = bodySize-(message->GetCursor()-8);
     while( leftToBeRead )
@@ -344,6 +395,7 @@ namespace XrdCl
       leftToBeRead -= bytesRead;
       message->AdvanceCursor( bytesRead );
     }
+    message->SetHasBody(true);
     return Status( stOK, suDone );
   }
 
@@ -802,6 +854,30 @@ namespace XrdCl
     switch( hdr->requestid )
     {
       //------------------------------------------------------------------------
+      // pgRead - we update the path id to tell the server where we want to
+      // get the response, but we still send the request through stream 0
+      // We need to allocate space for at least the first byte of
+      // ClientPgReadReqArgs if we don't have it included yet
+      //------------------------------------------------------------------------
+      case kXR_pgread:
+      {
+        ClientPgReadRequest *req = (ClientPgReadRequest*)msg->GetBuffer();
+        if( msg->GetSize() < sizeof(ClientPgReadRequest) + 1 )
+        {
+          msg->ReAllocate( sizeof(ClientPgReadRequest) + 1 );
+          req = (ClientPgReadRequest*)msg->GetBuffer();
+          void *newBuf = msg->GetBuffer(sizeof(ClientPgReadRequest));
+          memset( newBuf, 0, 1 );
+          req->dlen = 1;
+        }
+        ClientPgReadReqArgs *args = (ClientPgReadReqArgs*)msg->GetBuffer(sizeof(ClientPgReadRequest));
+        req->dlen = std::max(req->dlen, 1);
+        args->pathid = info->stream[downStream].pathId;
+        break;
+      }
+
+
+      //------------------------------------------------------------------------
       // Read - we update the path id to tell the server where we want to
       // get the response, but we still send the request through stream 0
       // We need to allocate space for read_args if we don't have it
@@ -981,6 +1057,14 @@ namespace XrdCl
         break;
 
       //------------------------------------------------------------------------
+      // kXR_pgread
+      //------------------------------------------------------------------------
+      case kXR_pgread:
+        req->pgread.offset = htonll( req->pgread.offset );
+        req->pgread.rlen   = htonl( req->pgread.rlen );
+        break;
+
+      //------------------------------------------------------------------------
       // kXR_read
       //------------------------------------------------------------------------
       case kXR_read:
@@ -1074,6 +1158,26 @@ namespace XrdCl
   }
 
   //----------------------------------------------------------------------------
+  // Check kXR_status header integrity
+  //----------------------------------------------------------------------------
+  Status XRootDTransport::CheckStatusIntegrity( Message *msg )
+  {
+    ServerResponseStatus *ms = (ServerResponseStatus *)msg->GetBuffer();
+
+    if (ms->hdr.streamid[0] != ms->bdy.streamID[0] ||
+        ms->hdr.streamid[1] != ms->bdy.streamID[1])
+      return Status( stError, errInternal );
+
+    const uint32_t crc32v = ntohl(ms->bdy.crc32c);
+    const uint32_t crc32c = XrdOucCRC::Calc32C(((uint8_t*)&ms->bdy.crc32c)+4, ntohl(ms->hdr.dlen)-4, 0U);
+
+    if (crc32v != crc32c)
+      return Status( stError, errCheckSumError );
+
+    return Status( stOK, suDone );
+  }
+
+  //----------------------------------------------------------------------------
   // Unmarshall the body of the incoming message
   //----------------------------------------------------------------------------
   Status XRootDTransport::UnMarshallBody( Message *msg, uint16_t reqType )
@@ -1159,6 +1263,24 @@ namespace XrdCl
     ServerResponseHeader *header = (ServerResponseHeader *)msg->GetBuffer();
     header->status = ntohs( header->status );
     header->dlen   = ntohl( header->dlen );
+    if (header->status == kXR_status)
+    {
+      ServerResponseStatus *srsp = (ServerResponseStatus *)header;
+      srsp->bdy.crc32c = ntohl(srsp->bdy.crc32c);
+      srsp->bdy.dlen = ntohl(srsp->bdy.dlen);
+
+      uint16_t rtype = srsp->bdy.requestid+kXR_1stRequest;
+      switch( rtype )
+      {
+        //----------------------------------------------------------------------
+        // kXR_pgread
+        //----------------------------------------------------------------------
+        case kXR_pgread:
+          ServerResponseBody_pgRead *pgr = (ServerResponseBody_pgRead *)msg->GetBuffer(24);
+          pgr->offset = ntohll(pgr->offset);
+          break;
+      }
+    }
   }
 
   //----------------------------------------------------------------------------
@@ -1260,6 +1382,24 @@ namespace XrdCl
       case XRootDQuery::ProtocolVersion:
         result.Set( new int( info->protocolVersion ), false );
         return Status();
+
+      //------------------------------------------------------------------------
+      // Data encryption
+      //------------------------------------------------------------------------
+      case XRootDQuery::HasDataEncryption:
+        bool hasde = info->encrypted;
+        if (hasde)
+        {
+          bool nodata = false;
+          XrdCl::Env *env = XrdCl::DefaultEnv::GetEnv();
+          int value = DefaultTlsNoData;
+          env->GetInt( "TlsNoData", value );
+          nodata = bool( value );
+          if (nodata) hasde = false;
+        }
+        result.Set( new bool( hasde ), false );
+        return Status();
+
     };
     return Status( stError, errQueryNotSupported );
   }
@@ -2540,6 +2680,21 @@ namespace XrdCl
             o << "kXR_vfs";
         }
         o << ")";
+        break;
+      }
+
+      //------------------------------------------------------------------------
+      // kXR_pgread
+      //------------------------------------------------------------------------
+      case kXR_pgread:
+      {
+        ClientPgReadRequest *sreq = (ClientPgReadRequest *)msg->GetBuffer();
+        o << "kXR_pgread (";
+        o << "handle: " << FileHandleToStr( sreq->fhandle );
+        o << std::setbase(10);
+        o << ", ";
+        o << "offset: " << sreq->offset << ", ";
+        o << "size: " << sreq->rlen << ")";
         break;
       }
 

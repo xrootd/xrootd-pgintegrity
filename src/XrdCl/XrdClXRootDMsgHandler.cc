@@ -129,6 +129,7 @@ namespace XrdCl
       return Ignore;
 
     ServerResponse *rsp    = (ServerResponse *)msg->GetBuffer();
+    ServerResponseStatus *srsp = nullptr;
     ClientRequest  *req    = (ClientRequest *)pRequest->GetBuffer();
     uint16_t        status = 0;
     uint32_t        dlen   = 0;
@@ -160,6 +161,21 @@ namespace XrdCl
 
       status = ntohs( embRsp->hdr.status );
       dlen   = ntohl( embRsp->hdr.dlen );
+
+      if (status == kXR_status)
+      {
+        if (msg->GetSize() < 24+dlen)
+          return Ignore;
+
+        srsp = (ServerResponseStatus*)embRsp;
+        const uint16_t reqId = ntohs( req->header.requestid );
+
+        if (reqId != srsp->bdy.requestid+kXR_1stRequest)
+          return Ignore;
+
+        status = (srsp->bdy.resptype == XrdProto::kXR_FinalResult) ? kXR_ok : kXR_oksofar;
+        dlen = ntohl(srsp->bdy.dlen);
+      }
     }
     //--------------------------------------------------------------------------
     // We got a sync message - check if it belongs to us
@@ -172,6 +188,21 @@ namespace XrdCl
 
       status = rsp->hdr.status;
       dlen   = rsp->hdr.dlen;
+
+      if (status == kXR_status)
+      {
+        if (msg->GetSize() < 8+dlen)
+          return Ignore;
+
+        srsp = (ServerResponseStatus*)rsp;
+        const uint16_t reqId = ntohs( req->header.requestid );
+
+        if (reqId != srsp->bdy.requestid+kXR_1stRequest)
+          return Ignore;
+
+        status = (srsp->bdy.resptype == XrdProto::kXR_FinalResult) ? kXR_ok : kXR_oksofar;
+        dlen = srsp->bdy.dlen;
+      }
     }
 
     //--------------------------------------------------------------------------
@@ -217,7 +248,7 @@ namespace XrdCl
         // already (handler installed to late and the message has been cached)
         //----------------------------------------------------------------------
         uint16_t reqId = ntohs( req->header.requestid );
-        if( reqId == kXR_read && msg->GetSize() == 8 )
+        if( reqId == kXR_read && !msg->HasBody() )
         {
           pReadRawStarted = false;
           pAsyncMsgSize   = dlen;
@@ -227,7 +258,7 @@ namespace XrdCl
         //----------------------------------------------------------------------
         // kXR_readv is the same as kXR_read
         //----------------------------------------------------------------------
-        if( reqId == kXR_readv  && msg->GetSize() == 8 )
+        if( reqId == kXR_readv && !msg->HasBody() )
         {
           pAsyncMsgSize      = dlen;
           pReadVRawMsgOffset = 0;
@@ -264,7 +295,7 @@ namespace XrdCl
         uint16_t reqId = ntohs( req->header.requestid );
         if( reqId == kXR_read )
         {
-          if( msg->GetSize() == 8 )
+          if( !msg->HasBody() )
           {
             pReadRawStarted = false;
             pAsyncMsgSize   = dlen;
@@ -287,7 +318,7 @@ namespace XrdCl
         //----------------------------------------------------------------------
         if( reqId == kXR_readv )
         {
-          if( msg->GetSize() == 8 )
+          if( !msg->HasBody() )
           {
             pAsyncMsgSize      = dlen;
             pReadVRawMsgOffset = 0;
@@ -354,7 +385,13 @@ namespace XrdCl
       // the dlen value of the original message
       //------------------------------------------------------------------------
       ServerResponse *embRsp = (ServerResponse *)embededMsg->GetBuffer();
-      if( embRsp->hdr.dlen != rsp->hdr.dlen-16 )
+      size_t bl = embRsp->hdr.dlen;
+      if ( embRsp->hdr.status == kXR_status)
+      {
+        ServerResponseStatus *embRsps = (ServerResponseStatus *)embededMsg->GetBuffer();
+        bl += embRsps->bdy.dlen;
+      }
+      if( bl != rsp->hdr.dlen-16U )
       {
         log->Error( XRootDMsg, "[%s] Sizes of the async response to %s and the "
                     "embedded message are inconsistent. Expected %d, got %d.",
@@ -396,7 +433,7 @@ namespace XrdCl
     //--------------------------------------------------------------------------
     // Process the message
     //--------------------------------------------------------------------------
-    Status st = XRootDTransport::UnMarshallBody( msg, req->header.requestid );
+    Status st = XRootDTransport::UnMarshallBody( msg, ntohs(req->header.requestid) );
     if( !st.IsOK() )
     {
       pStatus = Status( stFatal, errInvalidMessage );
@@ -418,6 +455,30 @@ namespace XrdCl
 
     switch( rsp->hdr.status )
     {
+      //------------------------------------------------------------------------
+      // kXR_status - we have a result, may or may not be complete
+      //------------------------------------------------------------------------
+      case kXR_status:
+      {
+        log->Dump( XRootDMsg, "[%s] Got a kXR_status response to request %s",
+                   pUrl.GetHostId().c_str(),
+                   pRequest->GetDescription().c_str() );
+        ServerResponseStatus *srsp = (ServerResponseStatus *)msg->GetBuffer();
+        if (srsp->bdy.requestid+kXR_1stRequest != ntohs(req->header.requestid))
+        {
+          pStatus = Status( stFatal, errInvalidMessage );
+          HandleResponse();
+          return;
+        }
+        if (srsp->bdy.resptype == XrdProto::kXR_FinalResult) {
+          pStatus   = Status();
+        } else {
+          pStatus   = Status( stOK, suContinue );
+        }
+        HandleResponse();
+        return;
+      }
+
       //------------------------------------------------------------------------
       // kXR_ok - we're done here
       //------------------------------------------------------------------------
@@ -1352,6 +1413,7 @@ namespace XrdCl
       return Status();
 
     ServerResponse *rsp = (ServerResponse *)pResponse->GetBuffer();
+    ServerResponseStatus *srsp = (ServerResponseStatus*)pResponse->GetBuffer();
     ClientRequest  *req = (ClientRequest *)pRequest->GetBuffer();
     Log            *log = DefaultEnv::GetLog();
 
@@ -1375,29 +1437,54 @@ namespace XrdCl
     {
       buffer = rsp->body.buffer.data;
       length = rsp->hdr.dlen;
+      if (rsp->hdr.status == kXR_status)
+      {
+        buffer = pResponse->GetBuffer(8+rsp->hdr.dlen);
+        length = srsp->bdy.dlen;
+      }
     }
     //--------------------------------------------------------------------------
     // Partial answers, we need to glue them together before parsing
     //--------------------------------------------------------------------------
-    else if( req->header.requestid != kXR_read &&
+    else if( req->header.requestid != kXR_pgread &&
+             req->header.requestid != kXR_read &&
              req->header.requestid != kXR_readv )
     {
       for( uint32_t i = 0; i < pPartialResps.size(); ++i )
       {
         ServerResponse *part = (ServerResponse*)pPartialResps[i]->GetBuffer();
-        length += part->hdr.dlen;
+        if (part->hdr.status == kXR_status) {
+          ServerResponseStatus *spart = (ServerResponseStatus*)part;
+          length += spart->bdy.dlen;
+        } else {
+          length += part->hdr.dlen;
+        }
       }
-      length += rsp->hdr.dlen;
+      if (rsp->hdr.status == kXR_status) {
+        length += srsp->bdy.dlen;
+      } else {
+        length += rsp->hdr.dlen;
+      }
 
       buff.Allocate( length );
       uint32_t offset = 0;
       for( uint32_t i = 0; i < pPartialResps.size(); ++i )
       {
         ServerResponse *part = (ServerResponse*)pPartialResps[i]->GetBuffer();
-        buff.Append( part->body.buffer.data, part->hdr.dlen, offset );
-        offset += part->hdr.dlen;
+        if (part->hdr.status == kXR_status) {
+          ServerResponseStatus *spart = (ServerResponseStatus*)part;
+          buff.Append(pPartialResps[i]->GetBuffer(8+part->hdr.dlen), spart->bdy.dlen, offset);
+          offset += spart->bdy.dlen;
+        } else {
+          buff.Append( part->body.buffer.data, part->hdr.dlen, offset );
+          offset += part->hdr.dlen;
+        }
       }
-      buff.Append( rsp->body.buffer.data, rsp->hdr.dlen, offset );
+      if (rsp->hdr.status == kXR_status) {
+        buff.Append( pResponse->GetBuffer(8+rsp->hdr.dlen), srsp->bdy.dlen, offset );
+      } else {
+        buff.Append( rsp->body.buffer.data, rsp->hdr.dlen, offset );
+      }
       buffer = buff.GetBuffer();
     }
 
@@ -1650,6 +1737,124 @@ namespace XrdCl
       }
 
       //------------------------------------------------------------------------
+      // kXR_pgread
+      //------------------------------------------------------------------------
+      case kXR_pgread:
+      {
+        log->Dump( XRootDMsg, "[%s] Parsing the response to %s as PgReadInfo",
+                   pUrl.GetHostId().c_str(),
+                   pRequest->GetDescription().c_str() );
+
+        //----------------------------------------------------------------------
+        // Glue in the cached responses and last response
+        //----------------------------------------------------------------------
+        ChunkInfo  chunk         = pChunkList->front();
+        bool       sizeMismatch  = false;
+        uint32_t   currentOffset = 0;
+        off_t      fileOffset    = chunk.offset;
+        char      *cursor        = (char*)chunk.buffer;
+
+        std::unique_ptr<PgReadInfo> info(new PgReadInfo());
+        std::vector<uint32_t> &cksums = info->GetCKSums();
+
+        cksums.reserve( (chunk.length + XrdProto::kXR_pgPageSZ - 1)/XrdProto::kXR_pgPageSZ );
+
+        if (srsp->bdy.dlen>0)
+        {
+          pPartialResps.push_back(pResponse);
+          pResponse = 0;
+        }
+
+        //--------------------------------------------------------------------------
+        // Consider each result (partial or final) and prepare to unpack
+        //--------------------------------------------------------------------------
+        for( uint32_t i = 0; i < pPartialResps.size(); ++i )
+        {
+          // must have the data
+          if (!pPartialResps[i]->HasBody())
+            return Status( stError, errInvalidResponse );
+
+          ServerResponseStatus *srsp = (ServerResponseStatus *)pPartialResps[i]->GetBuffer();
+
+          // only expect kXR_status response
+          if (srsp->hdr.status != kXR_status)
+            return Status( stError, errInvalidResponse );
+          ServerResponseBody_pgRead *pgr = (ServerResponseBody_pgRead *)pPartialResps[i]->GetBuffer(24);
+
+          // we should agree on the file offset these data are from
+          if (pgr->offset != fileOffset)
+            return Status( stError, errInvalidResponse );
+
+          //--------------------------------------------------------------------------
+          // find nfull= number of full pages & nbremain= number of remaning bytes
+          //--------------------------------------------------------------------------
+          const size_t nfull = srsp->bdy.dlen / (XrdProto::kXR_pgPageSZ + 4);
+          size_t nbremain;
+          {
+            const size_t p1_off = srsp->bdy.dlen % (XrdProto::kXR_pgPageSZ +4);
+            // datapayload has include a whole number of CRC32C values preceeding a non-zero data block
+            if (p1_off>0 && p1_off<=4)
+              return Status( stError, errInvalidResponse );
+
+            // if last block is complete zero, otherwise number of bytes
+            nbremain = (p1_off>4) ? p1_off-4 : 0;
+          }
+
+          // only the last block is alowed to not be kXR_pgPageSZ in size
+          if (nbremain>0 && (i+1) != pPartialResps.size())
+            return Status( stError, errInvalidResponse );
+
+          // number of data bytes in whole payload of this message
+          const size_t dbytes = XrdProto::kXR_pgPageSZ*nfull + nbremain;
+          if( currentOffset + dbytes > chunk.length )
+          {
+            sizeMismatch = true;
+            break;
+          }
+
+          // number of full or partial blocks
+          const size_t nblocks = nbremain>0 ? nfull+1 : nfull;
+
+          //--------------------------------------------------------------------------
+          // Copy each CRC and page (or partial page) to their place
+          //--------------------------------------------------------------------------
+          for(size_t j=0;j<nblocks;++j)
+          {
+            const size_t bl = (j==nfull) ? nbremain : XrdProto::kXR_pgPageSZ;
+            char *p = pPartialResps[i]->GetBuffer(32+(XrdProto::kXR_pgPageSZ+4)*j);
+            memcpy(cursor, &p[4], bl);
+            uint32_t crc32v = *(reinterpret_cast<uint32_t*>(p));
+            crc32v = ntohl(crc32v);
+            cksums.push_back(crc32v);
+
+            currentOffset += bl;
+            fileOffset    += bl;
+            cursor        += bl;
+          }
+        }
+
+        //----------------------------------------------------------------------
+        // Overflow?
+        //----------------------------------------------------------------------
+        if( pChunkStatus.front().sizeError || sizeMismatch )
+        {
+          log->Error( XRootDMsg, "[%s] Handling response to %s: user supplied "
+                      "buffer is too small for the received data.",
+                      pUrl.GetHostId().c_str(),
+                      pRequest->GetDescription().c_str() );
+          return Status( stError, errInvalidResponse );
+        }
+
+        chunk.length = currentOffset;
+        info->GetChunk() = chunk;
+
+        AnyObject *obj      = new AnyObject();
+        obj->Set( info.release() );
+        response = obj;
+        return Status();
+      }
+
+      //------------------------------------------------------------------------
       // kXR_read
       //------------------------------------------------------------------------
       case kXR_read:
@@ -1675,7 +1880,7 @@ namespace XrdCl
             break;
           }
 
-          if( pPartialResps[i]->GetSize() > 8 )
+          if( pPartialResps[i]->HasBody() )
             memcpy( cursor, part->body.buffer.data, part->hdr.dlen );
           currentOffset += part->hdr.dlen;
           cursor        += part->hdr.dlen;
@@ -1683,7 +1888,7 @@ namespace XrdCl
 
         if( currentOffset + rsp->hdr.dlen <= chunk.length )
         {
-          if( pResponse->GetSize() > 8 )
+          if( pResponse->HasBody() )
             memcpy( cursor, rsp->body.buffer.data, rsp->hdr.dlen );
           currentOffset += rsp->hdr.dlen;
         }
@@ -2016,10 +2221,10 @@ namespace XrdCl
     // Unpack the stuff that needs to be unpacked
     //--------------------------------------------------------------------------
     for( uint32_t i = 0; i < pPartialResps.size(); ++i )
-      if( pPartialResps[i]->GetSize() != 8 )
+      if( pPartialResps[i]->HasBody() )
         UnPackReadVResponse( pPartialResps[i] );
 
-    if( pResponse->GetSize() != 8 )
+    if( pResponse->HasBody() )
       UnPackReadVResponse( pResponse );
 
     //--------------------------------------------------------------------------
@@ -2055,6 +2260,12 @@ namespace XrdCl
     uint32_t  len          = msg->GetSize()-8;
     uint32_t  currentChunk = 0;
     char     *cursor       = msg->GetBuffer(8);
+    ServerResponseStatus *srsp = (ServerResponseStatus *)msg->GetBuffer();
+    if (srsp->hdr.status == kXR_status)
+    {
+       len = srsp->bdy.dlen;
+       cursor = msg->GetBuffer(8+srsp->hdr.dlen);
+    }
 
     while( 1 )
     {

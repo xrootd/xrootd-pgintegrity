@@ -47,6 +47,7 @@ namespace XrdCl
   {
     static const uint16_t ServerFlags     = 1002; //!< returns server flags
     static const uint16_t ProtocolVersion = 1003; //!< returns the protocol version
+    static const uint16_t HasDataEncryption = 1004; //!< data pass over encrypted streams
   };
 
   //----------------------------------------------------------------------------
@@ -179,6 +180,8 @@ namespace XrdCl
       //! Unmarshall the body of the incoming message
       //------------------------------------------------------------------------
       static Status UnMarshallBody( Message *msg, uint16_t reqType );
+
+      static Status CheckStatusIntegrity( Message *msg );
 
       //------------------------------------------------------------------------
       //! Unmarshall the header incoming message

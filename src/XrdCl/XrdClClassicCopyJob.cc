@@ -39,6 +39,7 @@
 #include "XrdCl/XrdClXRootDTransport.hh"
 #include "XrdClXCpCtx.hh"
 #include "XrdSys/XrdSysE2T.hh"
+#include "XrdSys/XrdSysPageSize.hh"
 
 #include <memory>
 #include <mutex>
@@ -609,6 +610,12 @@ namespace
         int val = XrdCl::DefaultSubStreamsPerChannel;
         XrdCl::DefaultEnv::GetEnv()->GetInt( "SubStreamsPerChannel", val );
         pMaxNbConn = val - 1; // account for the control stream
+
+        // round to whole number of pages, but try not to exceed pChunkSize
+        pChunkSizePG = XrdSys::PageSize*((pChunkSize + XrdSys::PageSize -1)/XrdSys::PageSize);
+
+        if (pChunkSizePG > pChunkSize && pChunkSizePG > XrdSys::PageSize)
+          pChunkSizePG -= XrdSys::PageSize;
       }
 
       //------------------------------------------------------------------------
@@ -759,6 +766,51 @@ namespace
 
       //------------------------------------------------------------------------
       // Fill the queue with in-the-fly read requests
+      //   concrete method for XrdCl::File to use PgRead
+      //------------------------------------------------------------------------
+      inline void FillQueue( XrdCl::File *reader )
+      {
+        //----------------------------------------------------------------------
+        // Get the number of connected streams
+        //----------------------------------------------------------------------
+        uint16_t parallel = pParallel;
+        if( pNbConn < pMaxNbConn )
+        {
+          pNbConn = XrdCl::DefaultEnv::GetPostMaster()->
+                                                 NbConnectedStrm( pDataServer );
+        }
+        if( pNbConn ) parallel *= pNbConn;
+
+        while( pChunks.size() < parallel && pCurrentOffset < pSize )
+        {
+          uint64_t chunkSize = pChunkSizePG;
+
+          uint64_t fb = chunkSize;
+          if( pCurrentOffset + chunkSize > (uint64_t)pSize )
+          {
+            chunkSize = pSize - pCurrentOffset;
+            fb = chunkSize;
+            chunkSize = XrdSys::PageSize*((chunkSize + XrdSys::PageSize -1)/XrdSys::PageSize);
+          }
+
+          char *buffer = new char[chunkSize];
+          ChunkHandler *ch = new ChunkHandler;
+          ch->chunk.offset = pCurrentOffset;
+          ch->chunk.length = fb;
+          ch->chunk.buffer = buffer;
+          ch->status = reader->PgRead( pCurrentOffset, chunkSize, buffer, ch );
+          pChunks.push( ch );
+          pCurrentOffset += fb;
+          if( !ch->status.IsOK() )
+          {
+            ch->sem->Post();
+            break;
+          }
+        }
+      }
+
+      //------------------------------------------------------------------------
+      // Fill the queue with in-the-fly read requests
       //------------------------------------------------------------------------
       template<typename READER>
       inline void FillQueue( READER *reader )
@@ -883,8 +935,13 @@ namespace
             delete statusval;
             if( response )
             {
+              XrdCl::PgReadInfo *pginfo = 0;
               XrdCl::ChunkInfo *resp = 0;
-              response->Get( resp );
+              response->Get( pginfo );
+              if (!pginfo)
+                response->Get( resp );
+              else
+                resp = &pginfo->GetChunk();
               if( resp )
                 chunk = *resp;
               delete response;
@@ -902,6 +959,7 @@ namespace
       int64_t                         pSize;
       int64_t                         pCurrentOffset;
       uint32_t                        pChunkSize;
+      uint32_t                        pChunkSizePG;
       uint16_t                        pParallel;
       std::queue<ChunkHandler *>      pChunks;
       std::string                     pDataServer;
@@ -1053,6 +1111,13 @@ namespace
         pUrl( url ), pFile( new XrdCl::File() ), pCurrentOffset( 0 ),
         pChunkSize( chunkSize ), pDone( false )
       {
+        // round to whole number of pages, but try not to exceed pChunkSize
+        uint64_t cs = XrdSys::PageSize*((pChunkSize + XrdSys::PageSize -1)/XrdSys::PageSize);
+
+        if (cs > pChunkSize && cs > XrdSys::PageSize)
+          cs -= XrdSys::PageSize;
+
+        pChunkSize = cs;
       }
 
       //------------------------------------------------------------------------
@@ -1133,9 +1198,10 @@ namespace
         //----------------------------------------------------------------------
         char     *buffer = new char[pChunkSize];
         uint32_t  bytesRead = 0;
+        std::vector<uint32_t> cksums;
 
-        XRootDStatus st = pFile->Read( pCurrentOffset, pChunkSize, buffer,
-                                       bytesRead );
+        XRootDStatus st = pFile->PgRead( pCurrentOffset, pChunkSize, buffer,
+                                       bytesRead, cksums );
 
         if( !st.IsOK() )
         {

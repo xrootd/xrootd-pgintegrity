@@ -227,11 +227,14 @@ namespace XrdCl
                              ResponseHandler *handler,
                              uint16_t         timeout )
   {
-    return XRootDStatus( stError, errNotImplemented );
+    if( pPlugIn )
+      return pPlugIn->PgRead( offset, size, buffer, handler, timeout );
+
+    return pStateHandler->PgRead( offset, size, buffer, handler, timeout );
   }
 
   //------------------------------------------------------------------------
-  // Read number of pages at a given offset - async
+  // Read number of pages at a given offset - sync
   //------------------------------------------------------------------------
   XRootDStatus File::PgRead( uint64_t               offset,
                              uint32_t               size,
@@ -240,7 +243,20 @@ namespace XrdCl
                              std::vector<uint32_t> &cksums,
                              uint16_t               timeout )
   {
-    return XRootDStatus( stError, errNotImplemented );
+    SyncResponseHandler handler;
+    XRootDStatus st = PgRead( offset, size, buffer, &handler, timeout );
+    if( !st.IsOK() )
+      return st;
+
+    PgReadInfo *pgReadInfo = 0;
+    XRootDStatus status = MessageUtils::WaitForResponse( &handler, pgReadInfo );
+    if( status.IsOK() )
+    {
+      bytesRead = pgReadInfo->GetChunk().length;
+      cksums = std::move(pgReadInfo->GetCKSums());
+      delete pgReadInfo;
+    }
+    return status;
   }
 
   //----------------------------------------------------------------------------

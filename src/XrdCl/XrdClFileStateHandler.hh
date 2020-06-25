@@ -125,6 +125,41 @@ namespace XrdCl
 
 
       //------------------------------------------------------------------------
+      //! Read number of pages at a given offset - async
+      //!
+      //! @param offset  offset from the beginning of the file
+      //! @param size    buffer size, at least 1 page big (4KB)
+      //! @param buffer  a pointer to a buffer big enough to hold the data
+      //! @param handler handler to be notified when the response arrives,
+      //!                the response parameter will hold a PgReadInfo object if
+      //!                the procedure was successful
+      //! @param timeout timeout value, if 0 the environment default will be
+      //!                used
+      //! @return        status of the operation
+      //------------------------------------------------------------------------
+      XRootDStatus PgRead( uint64_t         offset,
+                           uint32_t         size,
+                           void            *buffer,
+                           ResponseHandler *handler,
+                           uint16_t         timeout = 0 );
+
+      //------------------------------------------------------------------------
+      //! Used to check, fallback or refetch corrupt pages during PgRead()
+      //------------------------------------------------------------------------
+      void PgReadResume( XrdCl::XRootDStatus *status,
+                         XrdCl::AnyObject    *response,
+                         XrdCl::HostList     *hostList,
+                         std::vector<uint32_t> &allSums,
+                         uint32_t         totalreadsize,
+                         int              nresume,
+                         bool             plainread,
+                         uint64_t         offset,
+                         uint32_t         size,
+                         void            *buffer,
+                         ResponseHandler *handler,
+                         uint16_t         timeout);
+
+      //------------------------------------------------------------------------
       //! Read a data chunk at a given offset - sync
       //!
       //! @param offset  offset from the beginning of the file
