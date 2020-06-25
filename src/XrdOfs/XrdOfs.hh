@@ -149,6 +149,14 @@ public:
 
         int            read(XrdSfsAio *aioparm);
 
+         XrdSfsXferSize pgRead(XrdSfsFileOffset   offset,
+                              char              *buffer,
+                              XrdSfsXferSize     rdlen,
+                              uint32_t          *csvec,
+                              uint64_t           opts=0) override;
+
+        int            pgRead(XrdSfsAio *aioparm, uint64_t opts=0) override;
+
         XrdSfsXferSize write(XrdSfsFileOffset   fileOffset,
                              const char        *buffer,
                              XrdSfsXferSize     buffer_size);

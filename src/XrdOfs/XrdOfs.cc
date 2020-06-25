@@ -954,6 +954,52 @@ XrdSfsXferSize XrdOfsFile::read(XrdSfsFileOffset  offset,    // In
 }
 
 /******************************************************************************/
+/*                              p g R e a d                                   */
+/******************************************************************************/
+
+XrdSfsXferSize XrdOfsFile::pgRead(XrdSfsFileOffset  offset,     // In
+                                  char             *buffer,     // Out
+                                  XrdSfsXferSize    rdlen,      // In
+                                  uint32_t         *csvec,      // Out
+                                  uint64_t          opts)       // In
+/*
+  Output:   Returns the number of bytes read upon success and SFS_ERROR o/w.
+*/
+{
+   EPNAME("pgRead");
+   XrdSfsXferSize nbytes;
+
+// Perform required tracing
+//
+   FTRACE(read, rdlen <<"@" <<offset);
+
+// Make sure the offset is not too large
+//
+#if _FILE_OFFSET_BITS!=64
+   if (offset >  0x000000007fffffff)
+      return  XrdOfsFS->Emsg(epname, error, EFBIG, "pgRead", oh->Name());
+#endif
+
+   uint64_t ossopts = 0;
+   if ((opts & XrdSfsFile::Verify)) ossopts |= XrdOssDF::Verify;
+
+// Now read the actual number of bytes
+//
+   nbytes =  (XrdSfsXferSize)(oh->Select().pgRead((void *)buffer,
+                             (off_t)offset, (size_t)rdlen, csvec, ossopts));
+   if (nbytes < 0)
+      return XrdOfsFS->Emsg(epname, error, (int)nbytes, "pgRead", oh->Name());
+
+   if ((opts & XrdSfsFile::NetOrder))
+      {for(ssize_t ip=0;ip<((nbytes+XrdSys::PageSize-1)/XrdSys::PageSize);++ip)
+          {csvec[ip] = htonl(csvec[ip]);}}
+
+// Return number of bytes read
+//
+   return nbytes;
+}
+
+/******************************************************************************/
 /*                                  r e a d v                                 */
 /******************************************************************************/
 
@@ -1025,6 +1071,31 @@ int XrdOfsFile::read(XrdSfsAio *aiop)
 //
    if ((rc = oh->Select().Read(aiop)) < 0)
       return XrdOfsFS->Emsg(epname, error, rc, "read", oh->Name());
+
+// All done
+//
+   return SFS_OK;
+}
+
+/******************************************************************************/
+/*                           p g R e a d   A I O                              */
+/******************************************************************************/
+  
+/*
+  Output:   Returns the 0 if successfullt queued, otherwise returns an error.
+            The underlying implementation will convert the request to
+            synchronous I/O is async mode is not possible.
+*/
+
+int XrdOfsFile::pgRead(XrdSfsAio *aioparm, uint64_t opts)
+{
+// do synchronously
+//
+   aioparm->Result = this->pgRead((XrdSfsFileOffset)aioparm->sfsAio.aio_offset,
+                                            (char *)aioparm->sfsAio.aio_buf,
+                                    (XrdSfsXferSize)aioparm->sfsAio.aio_nbytes,
+                                                    aioparm->cksVec, opts);
+   aioparm->doneRead();
 
 // All done
 //
