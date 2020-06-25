@@ -31,6 +31,7 @@
 #include "Xrd/XrdScheduler.hh"
 
 #include "XrdOuc/XrdOucCache.hh"
+#include "XrdOuc/XrdOucCRC.hh"
 
 #include "XrdPosix/XrdPosixFileRH.hh"
 #include "XrdPosix/XrdPosixFile.hh"
@@ -71,6 +72,7 @@ void *callDoIt(void *pp)
 XrdPosixFileRH *XrdPosixFileRH::Alloc(XrdOucCacheIOCB *cbp,
                                       XrdPosixFile    *fp,
                                       long long        offs,
+                                      uint32_t        *csvec,
                                       int              xResult,
                                       ioType           typeIO)
 {
@@ -88,6 +90,7 @@ XrdPosixFileRH *XrdPosixFileRH::Alloc(XrdOucCacheIOCB *cbp,
    newCB->theCB   = cbp;
    newCB->theFile = fp;
    newCB->offset  = offs;
+   newCB->csvec  = csvec;
    newCB->result  = xResult;
    newCB->typeIO  = typeIO;
    return newCB;
@@ -113,6 +116,21 @@ void XrdPosixFileRH::HandleResponse(XrdCl::XRootDStatus *status,
             result = ibRead;
            }
    else if (typeIO == isWrite) theFile->UpdtSize(offset+result);
+   else if (typeIO == isPgRead)
+           {XrdCl::PgReadInfo *pgInfo = 0;
+            const XrdCl::ChunkInfo  *cInfo = 0;
+            union {uint32_t ubRead; int ibRead;};
+            response->Get(pgInfo);
+            if (pgInfo) cInfo = &pgInfo->GetChunk();
+            ubRead = (cInfo ? cInfo->length : 0);
+            result = ibRead;
+            std::vector<uint32_t> &cs = pgInfo->GetCKSums();
+            if (result>0) {
+               if (cs.size()>0)
+                  {memcpy(csvec, &cs[0], 4*cs.size());}
+              else{XrdOucCRC::Calc32C(cInfo->buffer, result, csvec);}}
+           }
+            
 
 // Get rid of things we don't need
 //

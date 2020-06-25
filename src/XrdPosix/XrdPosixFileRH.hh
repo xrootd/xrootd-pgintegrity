@@ -46,10 +46,11 @@ class XrdPosixFileRH : public XrdJob,
 {
 public:
 
-enum ioType {nonIO = 0, isRead = 1, isReadV = 2, isWrite = 3};
+enum ioType {nonIO = 0, isRead = 1, isReadV = 2, isWrite = 3, isPgRead = 4};
 
 static XrdPosixFileRH  *Alloc(XrdOucCacheIOCB *cbp, XrdPosixFile *fp,
-                              long long offs, int xResult, ioType typeIO);
+                              long long offs, uint32_t *csvec,
+                              int xResult, ioType typeIO);
 
         void            DoIt() {theCB->Done(result); Recycle();}
 
@@ -76,6 +77,7 @@ union  {XrdOucCacheIOCB *theCB;
        };
 XrdPosixFile            *theFile;
 long long                offset;
+uint32_t                *csvec;
 int                      result;
 ioType                   typeIO;
 };

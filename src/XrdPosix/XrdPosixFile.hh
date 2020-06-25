@@ -112,6 +112,19 @@ static void          DelayedDestroy(XrdPosixFile *fp);
 
        const char   *Path() {return fPath;}
 
+       int          pgRead(char       *buff,
+                           long long  offs,
+                           int        rdlen,
+                           uint32_t  *csvec,
+                           uint64_t   opts=0) override;
+
+       void         pgRead(XrdOucCacheIOCB &iocb,
+                           char            *buff,
+                           long long        offs,
+                           int              rdlen,
+                           uint32_t        *csvec,
+                           uint64_t         opts=0) override;
+
        int           Read (char *Buff, long long Offs, int Len);
 
        void          Read (XrdOucCacheIOCB &iocb, char *buff, long long offs,

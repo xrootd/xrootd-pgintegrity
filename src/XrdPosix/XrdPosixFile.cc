@@ -38,6 +38,7 @@
 #include <sys/stat.h>
 
 #include "XrdOuc/XrdOucName2Name.hh"
+#include "XrdOuc/XrdOucCRC.hh"
 #include "XrdPosix/XrdPosixCallBack.hh"
 #include "XrdPosix/XrdPosixFile.hh"
 #include "XrdPosix/XrdPosixFileRH.hh"
@@ -48,6 +49,7 @@
 
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysTimer.hh"
+#include "XrdSys/XrdSysPageSize.hh"
 
 /******************************************************************************/
 /*                        S t a t i c   M e m b e r s                         */
@@ -425,14 +427,14 @@ int XrdPosixFile::Read (char *Buff, long long Offs, int Len)
 
    return (Status.IsOK() ? (int)bytes : XrdPosixMap::Result(Status, false));
 }
-  
+
 /******************************************************************************/
 
 void XrdPosixFile::Read (XrdOucCacheIOCB &iocb, char *buff, long long offs,
                          int rlen)
 {
    XrdCl::XRootDStatus Status;
-   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, offs, rlen,
+   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, offs, nullptr, rlen,
                                                 XrdPosixFileRH::isRead);
 
 // Issue read
@@ -504,12 +506,77 @@ void XrdPosixFile::ReadV(XrdOucCacheIOCB &iocb, const XrdOucIOVec *readV, int n)
 
 // Issue the readv.
 //
-   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, 0, nbytes,
+   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, 0, nullptr, nbytes,
                                                 XrdPosixFileRH::isReadV);
    Ref();
    Status = clFile.VectorRead(chunkVec, (void *)0, rhp);
 
 // Return appropriate result
+//
+   if (!Status.IsOK())
+      {rhp->Sched(XrdPosixMap::Result(Status, false));
+       unRef();
+      }
+}
+
+/******************************************************************************/
+/*                              p g R e a d                                   */
+/******************************************************************************/
+
+int  XrdPosixFile::pgRead(char      *buff,
+                          long long  offs,
+                          int        rdlen,
+                          uint32_t  *csvec,
+                          uint64_t   opts)
+{
+   XrdCl::XRootDStatus Status;
+   uint32_t bytes;
+
+   std::vector<uint32_t> cksums;
+
+// Issue pgread and return appropriately.
+//
+   Ref();
+   Status = clFile.PgRead((uint64_t)offs, (uint32_t)rdlen, buff, bytes, cksums);
+   unRef();
+
+   if (Status.IsOK())
+   {
+     if (csvec)
+     {
+       if (cksums.size()>0)
+       {
+         memcpy(csvec, &cksums[0], 4*cksums.size());
+       }
+       else
+       {
+         XrdOucCRC::Calc32C(buff, bytes, csvec);
+       }
+     }
+   }
+
+   return (Status.IsOK() ? (int)bytes : XrdPosixMap::Result(Status, false));
+}
+  
+/******************************************************************************/
+
+void XrdPosixFile::pgRead(XrdOucCacheIOCB &iocb,
+                          char      *buff,
+                          long long  offs,
+                          int        rdlen,
+                          uint32_t  *csvec,
+                          uint64_t   opts)
+{
+   XrdCl::XRootDStatus Status;
+   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, offs, csvec, rdlen,
+                                                XrdPosixFileRH::isPgRead);
+
+// Issue read
+//
+   Ref();
+   Status = clFile.PgRead((uint64_t)offs, (uint32_t)rdlen, buff, rhp);
+
+// Check status
 //
    if (!Status.IsOK())
       {rhp->Sched(XrdPosixMap::Result(Status, false));
@@ -573,7 +640,7 @@ int XrdPosixFile::Sync()
 void XrdPosixFile::Sync(XrdOucCacheIOCB &iocb)
 {
    XrdCl::XRootDStatus Status;
-   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, 0, 0,
+   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, 0, nullptr, 0,
                                                 XrdPosixFileRH::nonIO);
 
 // Issue read
@@ -627,7 +694,7 @@ void XrdPosixFile::Write(XrdOucCacheIOCB &iocb, char *buff, long long offs,
                          int wlen)
 {
    XrdCl::XRootDStatus Status;
-   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, offs, wlen,
+   XrdPosixFileRH *rhp =  XrdPosixFileRH::Alloc(&iocb, this, offs, nullptr, wlen,
                                                 XrdPosixFileRH::isWrite);
 
 // Issue read
