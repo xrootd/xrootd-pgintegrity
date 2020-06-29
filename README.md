@@ -8,9 +8,8 @@ XrdPfc (Xcache) in branch pgpfc to extend use of pgRead & pgWrite:
 
 The Xcache module has been modified so that pgRead is used to fetch
 data from the origin server in order to cache it. Once XrdCl supports the
-method (experiemental version in branch pgclient) using pgRead should
-bring the benefit of the integrity check done by the client using
-per-page CRC values.
+method using pgRead should bring the benefit of the integrity check done
+by the client using per-page CRC values.
 
 Data is passed to the cache's file system along with the per-page checksum
 values by using pgWrite, allowing a file system featuring XRDOSS_HASFSCS
