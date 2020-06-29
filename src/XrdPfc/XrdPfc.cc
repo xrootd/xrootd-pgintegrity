@@ -611,15 +611,17 @@ void Cache::dec_ref_cnt(File* f, bool high_debug)
         // In this case file has been already removed from m_active map and
         // does not need to be synced.
 
-        if (cnt == 1)
+        cnt = f->dec_ref_cnt();
+
+        if (cnt == 0)
         {
-           TRACE_INT(tlvl, "Cache::dec_ref_cnt " << f->GetLocalPath() << " is in shutdown, ref_cnt = " << cnt
+           TRACE_INT(tlvl, "Cache::dec_ref_cnt " << f->GetLocalPath() << " is in shutdown, dec_ref_cnt = " << cnt
                      << " -- deleting File object without further ado");
            delete f;
         }
         else
         {
-           TRACE_INT(tlvl, "Cache::dec_ref_cnt " << f->GetLocalPath() << " is in shutdown, ref_cnt = " << cnt
+           TRACE_INT(tlvl, "Cache::dec_ref_cnt " << f->GetLocalPath() << " is in shutdown, dec_ref_cnt = " << cnt
                      << " -- waiting");
         }
 
