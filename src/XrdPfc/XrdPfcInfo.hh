@@ -99,6 +99,11 @@ public:
    void SetBitWritten(int i);
 
    //---------------------------------------------------------------------
+   //! Mark block as unavailable on disk
+   //---------------------------------------------------------------------
+   void ClearBitWritten(int i);
+
+   //---------------------------------------------------------------------
    //! Test if block at the given index is written to disk
    //---------------------------------------------------------------------
    bool TestBitWritten(int i) const;
@@ -112,6 +117,11 @@ public:
    //! Mark block as obtained through prefetch
    //---------------------------------------------------------------------
    void SetBitPrefetch(int i);
+
+   //---------------------------------------------------------------------
+   //! Mark block unavailability as synced to disk
+   //---------------------------------------------------------------------
+   void ClearBitSynced(int i);
 
    //---------------------------------------------------------------------
    //! Mark block as synced to disk
@@ -323,6 +333,15 @@ inline void Info::SetBitWritten(int i)
    m_buff_written[cn] |= cfiBIT(off);
 }
 
+inline void Info::ClearBitWritten(int i)
+{
+   const int cn = i/8;
+   assert(cn < GetSizeInBytes());
+
+   const int off = i - cn*8;
+   m_buff_written[cn] &= ~cfiBIT(off);
+}
+
 inline void Info::SetBitPrefetch(int i)
 {
    if (!m_buff_prefetch) return;
@@ -352,6 +371,15 @@ inline void Info::SetBitSynced(int i)
 
    const int off = i - cn*8;
    m_store.m_buff_synced[cn] |= cfiBIT(off);
+}
+
+inline void Info::ClearBitSynced(int i)
+{
+   const int cn = i/8;
+   assert(cn < GetSizeInBytes());
+
+   const int off = i - cn*8;
+   m_store.m_buff_synced[cn] &= ~cfiBIT(off);
 }
 
 //------------------------------------------------------------------------------

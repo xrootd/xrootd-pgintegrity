@@ -348,15 +348,17 @@ void Cache::ProcessWriteTasks()
 
 //==============================================================================
 
-char* Cache::RequestRAM(long long size)
+char* Cache::RequestRAM(long long size, size_t *crc_off)
 {
    static const size_t s_block_align = sysconf(_SC_PAGESIZE);
+
+   const long long ramsize = calc_rambuf_size(size, crc_off);
 
    bool  std_size = (size == m_configuration.m_bufferSize);
 
    m_RAM_mutex.Lock();
 
-   long long total = m_RAM_used + size;
+   long long total = m_RAM_used + ramsize;
 
    if (total <= m_configuration.m_RamAbsAvailable)
    {
@@ -375,7 +377,7 @@ char* Cache::RequestRAM(long long size)
       {
          m_RAM_mutex.UnLock();
          char *buf;
-         if (posix_memalign((void**) &buf, s_block_align, (size_t) size))
+         if (posix_memalign((void**) &buf, s_block_align, (size_t) ramsize))
          {
             // Report out of mem? Probably should report it at least the first time,
             // then periodically.
@@ -391,10 +393,11 @@ char* Cache::RequestRAM(long long size)
 void Cache::ReleaseRAM(char* buf, long long size)
 {
    bool std_size = (size == m_configuration.m_bufferSize);
+   const long long ramsize = calc_rambuf_size(size, nullptr);
    {
       XrdSysMutexHelper lock(&m_RAM_mutex);
 
-      m_RAM_used -= size;
+      m_RAM_used -= ramsize;
 
       if (std_size && m_RAM_std_size < m_configuration.m_RamKeepStdBlocks)
       {
@@ -561,6 +564,21 @@ void Cache::schedule_file_sync(File* f, bool ref_cnt_already_set, bool high_debu
 void Cache::FileSyncDone(File* f, bool high_debug)
 {
    dec_ref_cnt(f, high_debug);
+}
+
+size_t Cache::calc_rambuf_size(const size_t size, size_t *const crc_off)
+{
+   static const size_t s_block_align = sysconf(_SC_PAGESIZE);
+   const size_t n_data_crcpages = (size + XrdSys::PageSize - 1) / XrdSys::PageSize;
+   const size_t n_data_rampages = (n_data_crcpages*XrdSys::PageSize + s_block_align - 1) / s_block_align;
+   const size_t crcs_space = n_data_crcpages*4;
+
+   const size_t ret = n_data_rampages * s_block_align + crcs_space;
+   if (crc_off)
+   {
+      *crc_off = n_data_rampages * s_block_align;
+   }
+   return ret;
 }
 
 void Cache::inc_ref_cnt(File* f, bool lock, bool high_debug)
@@ -932,9 +950,31 @@ int Cache::Prepare(const char *curl, int oflags, mode_t mode)
       m_purge_delay_set.insert(f_name);
    }
 
-   struct stat sbuff;
-   int res = m_oss->Stat(i_name.c_str(), &sbuff);
-   if (res == 0)
+   // It is desirable that if we defer open here, Cache::Attach() should not trigger
+   // a connection to the origin. If it does the new XrdOucCacheIO (i.e. IOEntireFile
+   // or IOFileBlock) will miss the Update() to update the original IO, an
+   // XrdPosixPrepIO, with the XrdPosixFile object and subsequnt access to the file
+   // through the IO will incur an overhead of passing through PrepIO. Both the
+   // EntireFile or FileBlock may open a conneciton to the origin during construction
+   // if they can not infer the file size from the cinfo file. Make the check here
+   // similar to what is required to find the file size.
+
+   bool success = false;
+   XrdOssDF* infoFile = m_oss->newFile(m_configuration.m_username.c_str());
+   XrdOucEnv myEnv;
+   int res = infoFile->Open(i_name.c_str(), O_RDONLY, 0600, myEnv);
+   if (res >= 0)
+   {
+      Info info(m_trace, 0);
+      if (info.Read(infoFile, i_name))
+      {
+         success = true;
+      }
+   }
+   infoFile->Close();
+   delete infoFile;
+
+   if (success)
    {
       TRACE(Dump, "Cache::Prepare defer open " << f_name);
       return 1;

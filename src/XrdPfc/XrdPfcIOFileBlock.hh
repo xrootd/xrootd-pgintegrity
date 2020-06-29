@@ -56,12 +56,21 @@ public:
    using XrdOucCacheIO::Read;
 
    virtual int Read(char *Buffer, long long Offset, int Length);
+
+   using XrdOucCacheIO::pgRead;
+
+   virtual int pgRead(char	*buff,
+                      long long  offs,
+                      int        rdlen,
+                      uint32_t  *csvec,
+                      uint64_t   opts=0) override;
    
    virtual int  Fstat(struct stat &sbuff);
 
    virtual long long FSize();
 
 private:
+   bool                       m_badbs;           //!< blocksize not a multiple of cache blocksize
    long long                  m_blocksize;       //!< size of file-block
    std::map<int, File*>       m_blocks;          //!< map of created blocks
    XrdSysMutex                m_mutex;           //!< map mutex
@@ -73,6 +82,7 @@ private:
    int   initLocalStat();
    File* newBlockFile(long long off, int blocksize);
    void  CloseInfoFile();
+   int pgAwareRead(char *Buffer, long long Offset, int Length, bool isPg, uint32_t *csvec, uint64_t opts);
 };
 }
 

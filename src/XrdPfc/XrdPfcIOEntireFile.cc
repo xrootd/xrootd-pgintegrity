@@ -196,3 +196,14 @@ int IOEntireFile::ReadV(const XrdOucIOVec *readV, int n)
    return m_file->ReadV(this, readV, n);
 }
 
+/*
+ * Perform a pgRead from the cache
+ */
+int IOEntireFile::pgRead(char	*buff,
+                        long long  offs,
+                        int        rdlen,
+                        uint32_t  *csvec,
+                        uint64_t   opts)
+{
+   return m_file->pgRead(this, buff, offs, rdlen, csvec, opts);
+}

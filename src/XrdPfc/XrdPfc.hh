@@ -62,6 +62,7 @@ struct Configuration
    Configuration() :
       m_hdfsmode(false),
       m_allow_xrdpfc_command(false),
+      m_hasfscs(false),
       m_data_space("public"),
       m_meta_space("public"),
       m_diskTotalSpace(-1),
@@ -98,6 +99,7 @@ struct Configuration
 
    bool m_hdfsmode;                     //!< flag for enabling block-level operation
    bool m_allow_xrdpfc_command;         //!< flag for enabling access to /xrdpfc-command/ functionality.
+   bool m_hasfscs;                      //!< flag indicating if the disk cache file system supports checksums
 
    std::string m_username;              //!< username passed to oss plugin
    std::string m_data_space;            //!< oss space for data files
@@ -378,7 +380,7 @@ public:
    //---------------------------------------------------------------------
    void ProcessWriteTasks();
 
-   char* RequestRAM(long long size);
+   char* RequestRAM(long long size, size_t *);
    void  ReleaseRAM(char* buf, long long size);
 
    void RegisterPrefetchFile(File*);
@@ -470,6 +472,8 @@ private:
    FNameSet_t       m_purge_delay_set;
    bool             m_in_purge;
    XrdSysCondVar    m_active_cond;        //!< Cond-var protecting active file data structures.
+
+   size_t calc_rambuf_size(size_t size, size_t *crc_off);
 
    void inc_ref_cnt(File*, bool lock, bool high_debug);
    void dec_ref_cnt(File*, bool high_debug);

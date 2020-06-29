@@ -11,6 +11,8 @@
 #include "XrdCl/XrdClFile.hh"
 #include "XrdCl/XrdClXRootDResponses.hh"
 
+#include <algorithm>
+
 namespace XrdPfc
 {
 // A list of IOVec chuncks that match a given block index.
@@ -58,6 +60,14 @@ struct ReadVBlockListDisk
 {
    std::vector<ReadVChunkListDisk> bv;
 
+   size_t size() const { return bv.size(); }
+
+   void remove(const int blockIdx)
+   {
+      std::remove_if(std::begin(bv), std::end(bv),
+            [=](const ReadVChunkListDisk& v) { return (v.block_idx == blockIdx); });
+   }
+
    void AddEntry(int blockIdx, int chunkIdx)
    {
       for (std::vector<ReadVChunkListDisk>::iterator i = bv.begin(); i != bv.end(); ++i)
@@ -80,12 +90,39 @@ using namespace XrdPfc;
 
 int File::ReadV(IO *io, const XrdOucIOVec *readV, int n)
 {
+  RedoBlockSet_t badblocks;
+  int nb = 0;
+  int ret;
+  int tot=0;
+  do
+  {
+    ret = partialReadV(io, readV, n, badblocks);
+    if (ret<0) return ret;
+    tot += ret;
+    const int newnb = badblocks.size();
+    if (nb>0 && newnb>=nb)
+    {
+       // number of badblock not decresing
+       return -EDOM;
+    }
+    nb = newnb;
+  } while(nb>0);
+  return tot;
+}
+
+
+//------------------------------------------------------------------------------
+
+int File::partialReadV(IO *io, const XrdOucIOVec *readV, int n, RedoBlockSet_t &csredoset)
+{
    TRACEF(Dump, "File::ReadV for " << n << " chunks.");
 
    if ( ! VReadValidate(readV, n))
    {
       return -EINVAL;
    }
+
+   const Configuration &conf = Cache::GetInstance().RefConfiguration();
 
    Stats loc_stats;
 
@@ -100,6 +137,16 @@ int File::ReadV(IO *io, const XrdOucIOVec *readV, int n)
 
    m_state_cond.Lock();
 
+   if (m_diskblock_read_draining)
+   {
+      m_diskblock_waiters_cnt++;
+      while(m_diskblock_readers_cnt>0)
+      {
+         m_state_cond.Wait();
+      }
+      m_diskblock_waiters_cnt--;
+   }
+
    if ( ! m_is_open)
    {
       m_state_cond.UnLock();
@@ -113,9 +160,15 @@ int File::ReadV(IO *io, const XrdOucIOVec *readV, int n)
       return -ENOENT;
    }
 
-   VReadPreProcess(io, readV, n, blks_to_request, blocks_to_process, blocks_on_disk, chunkVec);
+   VReadPreProcess(io, readV, n, blks_to_request, blocks_to_process, blocks_on_disk, chunkVec, csredoset);
+
+   if (blocks_on_disk.size()>0)
+   {
+      m_diskblock_readers_cnt++;
+   }
 
    m_state_cond.UnLock();
+   csredoset.clear();
 
    // ----------------------------------------------------------------
 
@@ -138,15 +191,48 @@ int File::ReadV(IO *io, const XrdOucIOVec *readV, int n)
    // disk read
    if (bytesRead >= 0)
    {
-      int dr = VReadFromDisk(readV, n, blocks_on_disk);
-      if (dr < 0)
+      ErrorBlocks_t error_blocks;
+      int dr = VReadFromDisk(readV, n, blocks_on_disk, error_blocks);
+      for(const auto &be: error_blocks)
       {
-         bytesRead = dr;
+         const int blk = be.first;
+         const long long blkrc = be.second;
+         if (conf.m_hasfscs && (blkrc == -EDOM || blkrc == -EIO))
+         {
+            csredoset.insert(blk);
+         }
+         else
+         {
+            // a non-csum error
+            bytesRead = blkrc;
+            break;
+         }
       }
-      else
+      if (bytesRead >= 0)
       {
          bytesRead += dr;
          loc_stats.m_BytesHit += dr;
+      }
+   }
+
+   if (blocks_on_disk.size()>0)
+   {
+     if  (csredoset.size()>0)
+      {
+         XrdSysCondVarHelper _lck(m_state_cond);
+         m_diskblock_read_draining = true;
+      }
+      ClearDiskBlocks(csredoset);
+      for(const auto &b: csredoset)
+      {
+        blocks_on_disk.remove(b);
+      }
+      XrdSysCondVarHelper _lck(m_state_cond);
+      m_diskblock_readers_cnt--;
+      if (m_diskblock_waiters_cnt>0 && m_diskblock_readers_cnt==0)
+      {
+         m_state_cond.Broadcast();
+         m_diskblock_read_draining = false;
       }
    }
 
@@ -242,7 +328,8 @@ void File::VReadPreProcess(IO *io, const XrdOucIOVec *readV, int n,
                            BlockList_t              &blks_to_request,
                            ReadVBlockListRAM        &blocks_to_process,
                            ReadVBlockListDisk       &blocks_on_disk,
-                           std::vector<XrdOucIOVec> &chunkVec)
+                           std::vector<XrdOucIOVec> &chunkVec,
+                           const RedoBlockSet_t     &csredoset)
 {
    // Must be called under downloadCond lock.
 
@@ -253,6 +340,10 @@ void File::VReadPreProcess(IO *io, const XrdOucIOVec *readV, int n,
 
       for (int block_idx = blck_idx_first; block_idx <= blck_idx_last; ++block_idx)
       {
+         if (!csredoset.empty() && csredoset.count(block_idx)==0)
+         {
+            continue;
+         }
          TRACEF(Dump, "VReadPreProcess chunk "<<  readV[iov_idx].size << "@"<< readV[iov_idx].offset);
 
          BlockMap_i bi = m_block_map.find(block_idx);
@@ -299,12 +390,14 @@ void File::VReadPreProcess(IO *io, const XrdOucIOVec *readV, int n,
 
 //------------------------------------------------------------------------------
 
-int File::VReadFromDisk(const XrdOucIOVec *readV, int n, ReadVBlockListDisk& blocks_on_disk)
+int File::VReadFromDisk(const XrdOucIOVec *readV, int n, ReadVBlockListDisk& blocks_on_disk, ErrorBlocks_t &error_blocks)
 {
    int bytes_read = 0;
    for (std::vector<ReadVChunkListDisk>::iterator bit = blocks_on_disk.bv.begin(); bit != blocks_on_disk.bv.end(); ++bit )
    {
       int blockIdx = bit->block_idx;
+      bool badblock = false;
+      int blockReadSize = 0;
       for (std::vector<int>::iterator chunkIt = bit->arr.begin(); chunkIt != bit->arr.end(); ++chunkIt)
       {
          int chunkIdx = *chunkIt;
@@ -323,17 +416,25 @@ int File::VReadFromDisk(const XrdOucIOVec *readV, int n, ReadVBlockListDisk& blo
          {
             TRACEF(Error, "VReadFromDisk FAILED rs=" << rs << " block=" << blockIdx << " chunk=" << chunkIdx << " off=" << off  <<
                           " blk_off=" <<  blk_off << " size=" << size <<  " chunkOff=" << readV[chunkIdx].offset);
-            return rs;
+            error_blocks.push_back(std::make_pair(blockIdx, rs));
+            badblock = true;
+            break;
          }
 
          if (rs != size)
          {
             TRACEF(Error, "VReadFromDisk FAILED incomplete read rs=" << rs << " block=" << blockIdx << " chunk=" << chunkIdx << " off=" << off  <<
                           " blk_off=" <<  blk_off << " size=" << size <<  " chunkOff=" << readV[chunkIdx].offset);
-            return -EIO;
+            error_blocks.push_back(std::make_pair(blockIdx, -EIO));
+            badblock = true;
+            break;
          }
 
-         bytes_read += rs;
+         blockReadSize += rs;
+      }
+      if (!badblock)
+      {
+         bytes_read += blockReadSize;
       }
    }
 

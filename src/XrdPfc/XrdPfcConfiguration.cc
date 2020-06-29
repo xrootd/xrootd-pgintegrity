@@ -11,6 +11,9 @@
 #include "XrdOuc/XrdOuca2x.hh"
 
 #include "XrdOfs/XrdOfsConfigPI.hh"
+
+#include "XrdSys/XrdSysPageSize.hh"
+
 #include "XrdVersion.hh"
 
 #include <fcntl.h>
@@ -234,6 +237,20 @@ bool Cache::Config(const char *config_filename, const char *parameters)
       TRACE(Error, "Cache::Config() Unable to create an OSS object");
       m_oss = 0;
       return false;
+   }
+
+   m_configuration.m_hasfscs = (m_oss->Features() & XRDOSS_HASFSCS) ? true : false;
+   if (m_configuration.m_hasfscs)
+   {
+      char errStr[1024];
+      if ((m_configuration.m_bufferSize % XrdSys::PageSize)!=0)
+      {
+         snprintf(errStr, sizeof(errStr), "Cache::Config() The Oss supports filesystem checksums, so "
+                                          "pfc.blocksize (%lld) must be a multiple of the page size %d",
+                                          m_configuration.m_bufferSize, XrdSys::PageSize);
+         m_log.Emsg(errStr, "");
+         return false;
+      }
    }
 
    // sets default value for disk usage
@@ -639,6 +656,15 @@ bool Cache::ConfigParameters(std::string part, XrdOucStream& config, TmpConfigur
             m_log.Emsg("Config", "Error setting the fragment size parameter name");
             return false;
          }
+      }
+
+      if ((m_configuration.m_hdfsbsize % m_configuration.m_bufferSize) != 0)
+      {
+         char errStr[1024];
+         snprintf(errStr, sizeof(errStr), "Config pfc.hdfsmode hdfsbsize (%lld) must be a multiple of cache "
+                                          "blocksize %lld", m_configuration.m_hdfsbsize, m_configuration.m_bufferSize);
+         m_log.Emsg(errStr, "");
+         return false;
       }
    }
    else if ( part == "flush" )
