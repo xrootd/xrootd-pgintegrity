@@ -892,11 +892,11 @@ int File::partialRead(IO *io, char* iUserBuff, long long iUserOff, int iUserSize
    // Second, read blocks from disk.
    if ( ! blks_on_disk.empty() && bytes_read >= 0)
    {
-      // have to set Verify so we can discover if the copy cache has crc mismatch: otherwise
-      // in the case of a pgRead client, we would reply on the client coming back
-      // with the Verify option set before discoving corruption in our cache
+      // read from disk: if client is using pgRead but doesn't ask for verify we just
+      // pass the data and crcs back without checking. If the client discovers a problem
+      // they will come back with Verify, we will discover the problem and refetch.
       ErrorBlocks_t error_blocks;
-      int rc = ReadBlocksFromDisk(blks_on_disk, iUserBuff, iUserOff, iUserSize, error_blocks, ispg, csvec, XrdOssDF::Verify);
+      int rc = ReadBlocksFromDisk(blks_on_disk, iUserBuff, iUserOff, iUserSize, error_blocks, ispg, csvec, opts);
       TRACEF(Dump, "File::Read() " << (void*)iUserBuff <<" from disk finished size = " << rc);
       for(const auto &be: error_blocks)
       {
