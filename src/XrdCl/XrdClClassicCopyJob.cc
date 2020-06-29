@@ -611,11 +611,9 @@ namespace
         XrdCl::DefaultEnv::GetEnv()->GetInt( "SubStreamsPerChannel", val );
         pMaxNbConn = val - 1; // account for the control stream
 
-        // round to whole number of pages, but try not to exceed pChunkSize
-        pChunkSizePG = XrdSys::PageSize*((pChunkSize + XrdSys::PageSize -1)/XrdSys::PageSize);
-
-        if (pChunkSizePG > pChunkSize && pChunkSizePG > XrdSys::PageSize)
-          pChunkSizePG -= XrdSys::PageSize;
+        // for pgRead round up chunk size to whole number of pages
+        pChunkSizePG = std::min(pChunkSize, 0xfffff000U);
+        pChunkSizePG = (pChunkSizePG + XrdSys::PageMask) & ~XrdSys::PageMask;
       }
 
       //------------------------------------------------------------------------
@@ -790,7 +788,7 @@ namespace
           {
             chunkSize = pSize - pCurrentOffset;
             fb = chunkSize;
-            chunkSize = XrdSys::PageSize*((chunkSize + XrdSys::PageSize -1)/XrdSys::PageSize);
+            chunkSize = (chunkSize + XrdSys::PageMask) & ~XrdSys::PageMask;
           }
 
           char *buffer = new char[chunkSize];
@@ -1111,13 +1109,9 @@ namespace
         pUrl( url ), pFile( new XrdCl::File() ), pCurrentOffset( 0 ),
         pChunkSize( chunkSize ), pDone( false )
       {
-        // round to whole number of pages, but try not to exceed pChunkSize
-        uint64_t cs = XrdSys::PageSize*((pChunkSize + XrdSys::PageSize -1)/XrdSys::PageSize);
-
-        if (cs > pChunkSize && cs > XrdSys::PageSize)
-          cs -= XrdSys::PageSize;
-
-        pChunkSize = cs;
+        // round up to whole number of pages
+        pChunkSize = std::min(pChunkSize, 0xfffff000U);
+        pChunkSize = (pChunkSize + XrdSys::PageMask) & ~XrdSys::PageMask;
       }
 
       //------------------------------------------------------------------------

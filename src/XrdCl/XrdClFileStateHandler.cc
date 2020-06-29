@@ -846,7 +846,7 @@ namespace XrdCl
       if (hasde && *hasde == true)
       {
         std::vector<uint32_t> &cksums = info->GetCKSums();
-        cksums.resize( (retChunk->length + XrdProto::kXR_pgPageSZ - 1)/XrdProto::kXR_pgPageSZ );
+        cksums.resize( (retChunk->length + (XrdProto::kXR_pgPageSZ - 1))/XrdProto::kXR_pgPageSZ );
         XrdOucCRC::Calc32C(retChunk->buffer, retChunk->length, &cksums[0]);
       }
       response->Set( info.release() );
@@ -881,7 +881,7 @@ namespace XrdCl
     else
     {
       HasReplaced = true;
-      nreplaced = (cread + XrdProto::kXR_pgPageSZ -1) / XrdProto::kXR_pgPageSZ;
+      nreplaced = (cread + (XrdProto::kXR_pgPageSZ -1)) / XrdProto::kXR_pgPageSZ;
       replaceIdx = (coffset - offset)/XrdProto::kXR_pgPageSZ;
 
       for(int n=0;n<nreplaced;++n)
@@ -905,7 +905,7 @@ namespace XrdCl
     }
 
     int nmismatched = 1;
-    int nmax = (totalreadsize+XrdProto::kXR_pgPageSZ-1)/XrdProto::kXR_pgPageSZ;
+    int nmax = (totalreadsize+(XrdProto::kXR_pgPageSZ-1))/XrdProto::kXR_pgPageSZ;
     while(iverfIdx+nmismatched < nmax)
     {
       uint32_t idx = XrdProto::kXR_pgPageSZ * (iverfIdx+nmismatched);
@@ -924,7 +924,7 @@ namespace XrdCl
     pgReadInfo = 0;
 
     if (HasReplaced && (nreplaced==0 || 
-           (replaceIdx <= iverfIdx+nmismatched-1 && iverfIdx <= replaceIdx+nreplaced-1)))
+           (replaceIdx < iverfIdx+nmismatched && iverfIdx < replaceIdx+nreplaced)))
     {
       // no replacement fetched or some of the replacement block(s) also had error
       status = new XRootDStatus( stError, errCheckSumError );

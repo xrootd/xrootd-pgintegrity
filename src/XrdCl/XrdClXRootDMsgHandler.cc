@@ -1757,7 +1757,7 @@ namespace XrdCl
         std::unique_ptr<PgReadInfo> info(new PgReadInfo());
         std::vector<uint32_t> &cksums = info->GetCKSums();
 
-        cksums.reserve( (chunk.length + XrdProto::kXR_pgPageSZ - 1)/XrdProto::kXR_pgPageSZ );
+        cksums.reserve( (chunk.length + (XrdProto::kXR_pgPageSZ - 1))/XrdProto::kXR_pgPageSZ );
 
         if (srsp->bdy.dlen>0)
         {
@@ -1788,10 +1788,10 @@ namespace XrdCl
           //--------------------------------------------------------------------------
           // find nfull= number of full pages & nbremain= number of remaning bytes
           //--------------------------------------------------------------------------
-          const size_t nfull = srsp->bdy.dlen / (XrdProto::kXR_pgPageSZ + 4);
+          const size_t nfull = srsp->bdy.dlen / XrdProto::kXR_pgUnitSZ;
           size_t nbremain;
           {
-            const size_t p1_off = srsp->bdy.dlen % (XrdProto::kXR_pgPageSZ +4);
+            const size_t p1_off = srsp->bdy.dlen % XrdProto::kXR_pgUnitSZ;
             // datapayload has include a whole number of CRC32C values preceeding a non-zero data block
             if (p1_off>0 && p1_off<=4)
               return Status( stError, errInvalidResponse );
@@ -1821,7 +1821,7 @@ namespace XrdCl
           for(size_t j=0;j<nblocks;++j)
           {
             const size_t bl = (j==nfull) ? nbremain : XrdProto::kXR_pgPageSZ;
-            char *p = pPartialResps[i]->GetBuffer(32+(XrdProto::kXR_pgPageSZ+4)*j);
+            char *p = pPartialResps[i]->GetBuffer(32 + XrdProto::kXR_pgUnitSZ*j);
             memcpy(cursor, &p[4], bl);
             uint32_t crc32v = *(reinterpret_cast<uint32_t*>(p));
             crc32v = ntohl(crc32v);
