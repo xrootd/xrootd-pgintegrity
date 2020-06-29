@@ -1,2 +1,1 @@
-include( XrdPfc )
 include( XrdOssIntegrity )
