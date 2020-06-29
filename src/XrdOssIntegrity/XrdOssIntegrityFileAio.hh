@@ -34,6 +34,7 @@
 #include "Xrd/XrdScheduler.hh"
 #include "XrdSfs/XrdSfsAio.hh"
 #include "XrdOssIntegrity.hh"
+#include "XrdSys/XrdSysPageSize.hh"
 
 #include <mutex>
 #include <thread>
@@ -88,6 +89,41 @@ public:
          successor_->doneRead();
          return;
       }
+      //
+      // if this is a pg operation, and this may have been a short read,
+      // try to complete to a page boundary
+      //
+      ssize_t toread = this->sfsAio.aio_nbytes - this->Result;
+      ssize_t nread = this->Result;
+      ssize_t premain = XrdSys::PageSize - (nread % XrdSys::PageSize);
+      if (premain == XrdSys::PageSize) premain = 0;
+
+      if (isPgOp_)
+      {
+         // read enough to complete the next page
+         toread = std::min(toread, premain);
+      }
+      else
+      {
+         // not a pg operation, no need to read more
+         toread = 0;
+      }
+      char *p = (char*)this->sfsAio.aio_buf;
+      while(toread>0)
+      {
+         const ssize_t rret = file_->successor_->Read(&p[nread], this->sfsAio.aio_offset+nread, toread);
+         if (rret == 0) break;
+         if (rret<0)
+         {
+            successor_->Result = rret;
+            rg_.ReleaseAll();
+            successor_->doneRead();
+            return;
+         }
+         toread -= rret;
+         nread += rret;
+      }
+      successor_->Result = nread;
       SchedReadJob();
    }
 

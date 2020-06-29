@@ -57,7 +57,7 @@ public:
 
    ssize_t FetchRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssIntegrityRangeGuard&);
    int StoreRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, XrdOssIntegrityRangeGuard&);
-   void LockRange(XrdOssIntegrityRangeGuard &, off_t, off_t, bool);
+   void LockTrackinglen(XrdOssIntegrityRangeGuard &, off_t, off_t, bool);
 
    int truncate(XrdOssDF *, off_t, XrdOssIntegrityRangeGuard&);
    Sizes_t TrackedSizesGet(bool);

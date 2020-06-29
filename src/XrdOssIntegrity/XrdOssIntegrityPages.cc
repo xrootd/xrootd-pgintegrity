@@ -321,14 +321,16 @@ int XrdOssIntegrityPages::UpdateRangeAligned(const void *const buff, const off_t
 }
 
 //
-// LockRange: byte range lock [offset, offend)
+// LockTrackinglen: obtain current tracking counts and lock the following as necessary:
+//                  tracking counts and file byte range [offset, offend)
 //
 // offset - byte offset to apply lock
 // offend - end of range byte (excluding byte at end)
-// rdonly - readonly lock
+// rdonly - will be a read-only operation
 //
-void XrdOssIntegrityPages::LockRange(XrdOssIntegrityRangeGuard &rg, const off_t offset, const off_t offend, const bool rdonly)
+void XrdOssIntegrityPages::LockTrackinglen(XrdOssIntegrityRangeGuard &rg, const off_t offset, const off_t offend, const bool rdonly)
 {
+   // in case of empty range the tracking len is not copied
    if (offset == offend) return;
 
    {

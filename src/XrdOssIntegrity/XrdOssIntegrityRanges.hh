@@ -57,7 +57,7 @@ class XrdOssIntegrityRanges;
 class XrdOssIntegrityRangeGuard
 {
 public:
-   XrdOssIntegrityRangeGuard() : r_(nullptr), rp_(nullptr), pages_(nullptr) { }
+   XrdOssIntegrityRangeGuard() : r_(nullptr), rp_(nullptr), pages_(nullptr), trackinglenlocked_(false) { }
    ~XrdOssIntegrityRangeGuard();
 
    void SetRange(XrdOssIntegrityRanges *r, XrdOssIntegrityRange_s *rp)

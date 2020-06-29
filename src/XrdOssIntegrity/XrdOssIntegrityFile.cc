@@ -306,7 +306,7 @@ ssize_t XrdOssIntegrityFile::Read(void *buff, off_t offset, size_t blen)
    if (!pages_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, offset+blen, true);
+   pages_->LockTrackinglen(rg, offset, offset+blen, true);
 
    const ssize_t bread = successor_->Read(buff, offset, blen);
    if (bread<0 || blen==0) return bread;
@@ -325,7 +325,7 @@ ssize_t XrdOssIntegrityFile::ReadRaw(void *buff, off_t offset, size_t blen)
    if (!pages_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, offset+blen, true);
+   pages_->LockTrackinglen(rg, offset, offset+blen, true);
 
    const ssize_t bread = successor_->ReadRaw(buff, offset, blen);
    if (bread<0 || blen==0) return bread;
@@ -354,7 +354,7 @@ ssize_t XrdOssIntegrityFile::ReadV(XrdOucIOVec *readV, int n)
       if (p1<start) start = p1;
       if (p2>end) end = p2;
    }
-   pages_->LockRange(rg, start, end, true);
+   pages_->LockTrackinglen(rg, start, end, true);
 
    // standard OSS gives -ESPIPE in case of partial read of an element
    ssize_t rret = successor_->ReadV(readV, n);
@@ -378,7 +378,7 @@ ssize_t XrdOssIntegrityFile::Write(const void *buff, off_t offset, size_t blen)
    if (rdonly_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, offset+blen, false);
+   pages_->LockTrackinglen(rg, offset, offset+blen, false);
 
    int puret = pages_->UpdateRange(successor_, buff, offset, blen, rg);
    if (puret<0)
@@ -421,7 +421,7 @@ ssize_t XrdOssIntegrityFile::WriteV(XrdOucIOVec *writeV, int n)
       if (p1<start) start = p1;
       if (p2>end) end = p2;
    }
-   pages_->LockRange(rg, start, end, false);
+   pages_->LockTrackinglen(rg, start, end, false);
 
    for (int i=0; i<n; i++)
    {
@@ -451,19 +451,21 @@ ssize_t XrdOssIntegrityFile::pgRead(void *buffer, off_t offset, size_t rdlen, ui
    if ((rdlen % XrdSys::PageSize) != 0) return -EINVAL;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, offset+rdlen, true);
+   pages_->LockTrackinglen(rg, offset, offset+rdlen, true);
 
    ssize_t toread = rdlen;
    ssize_t bread = 0;
    uint8_t *const p = (uint8_t*)buffer;
-   while(toread>0)
+   do
    {
       ssize_t rret = successor_->Read(&p[bread], offset+bread, toread);
       if (rret<0) return rret;
       if (rret==0) break;
       toread -= rret;
       bread += rret;
-   }
+   } while(toread>0 && (bread % XrdSys::PageSize)!=0);
+   if (rdlen == 0) return bread;
+
    ssize_t puret = pages_->FetchRange(successor_, buffer, offset, bread, csvec, opts, rg);
    if (puret<0) return puret;
    if (puret != bread)
@@ -488,7 +490,7 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
    }
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, offset+wrlen, false);
+   pages_->LockTrackinglen(rg, offset, offset+wrlen, false);
 
    int puret = pages_->StoreRange(successor_, buffer, offset, wrlen, csvec, rg);
    if (puret<0) {
@@ -499,7 +501,7 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
    ssize_t towrite = wrlen;
    ssize_t bwritten = 0;
    const uint8_t *p = (uint8_t*)buffer;
-   while(towrite>0)
+   do
    {
       ssize_t wret = successor_->Write(&p[bwritten], offset+bwritten, towrite);
       if (wret<0)
@@ -510,7 +512,7 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
       }
       towrite -= wret;
       bwritten += wret;
-   }
+   } while(towrite>0);
    return bwritten;
 }
 
@@ -530,7 +532,7 @@ int XrdOssIntegrityFile::Ftruncate(unsigned long long flen)
    if (rdonly_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, flen, LLONG_MAX, false);
+   pages_->LockTrackinglen(rg, flen, LLONG_MAX, false);
    int ret = pages_->truncate(successor_, flen, rg);
    if (ret<0)
    {
@@ -560,7 +562,7 @@ int XrdOssIntegrityFile::Fstat(struct stat *buff)
 int XrdOssIntegrityFile::resyncSizes()
 {
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, 0, LLONG_MAX, false);
+   pages_->LockTrackinglen(rg, 0, LLONG_MAX, false);
    struct stat sbuff;
    int ret = successor_->Fstat(&sbuff);
    if (ret<0) return ret;

@@ -138,6 +138,33 @@ TEST_F(ossintegrity_pageTest,onepage) {
   ASSERT_TRUE(csvec[0] == 0x353125d0);
 }
 
+TEST_F(ossintegrity_pageTest,zerolenread) {
+  ssize_t ret = m_file->Write(m_b, 0, 4096);
+  ASSERT_TRUE(ret == 4096);
+  uint8_t rbuf[4096];
+  uint32_t csvec[1];
+  ret = m_file->pgRead(rbuf, 0, 0, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->pgRead(rbuf, 4096, 0, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->pgRead(rbuf, 4096, 4096, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->pgRead(rbuf, 8192, 0, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->pgRead(rbuf, 8192, 4096, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->Read(rbuf, 0, 0);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->Read(rbuf, 1024, 0);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->Read(rbuf, 4096, 0);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->Read(rbuf, 4100, 10);
+  ASSERT_TRUE(ret == 0);
+  ret = m_file->Read(rbuf, 8192, 0);
+  ASSERT_TRUE(ret == 0);
+}
+
 TEST_F(ossintegrity_pageTest,twopages) {
   ssize_t ret = m_file->Write(m_b, 0, 8192);
   ASSERT_TRUE(ret == 8192);
