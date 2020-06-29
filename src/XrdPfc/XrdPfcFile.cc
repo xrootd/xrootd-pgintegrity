@@ -538,10 +538,10 @@ Block* File::PrepareBlockRequest(int i, IO *io, bool prefetch)
    // catch the block while still in memory.
 
    const long long BS   = m_cfi.GetBufferSize();
-   const int last_block = m_cfi.GetSizeInBits() - 1;
+   const int last_block = (m_offset/BS) + m_cfi.GetSizeInBits() - 1;
 
    long long off     = i * BS;
-   long long this_bs = (i == last_block) ? m_file_size - off : BS;
+   long long this_bs = (i == last_block) ? m_offset + m_file_size - off : BS;
 
    Block *b   = 0;
 
