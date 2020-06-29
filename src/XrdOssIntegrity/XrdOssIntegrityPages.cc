@@ -320,9 +320,16 @@ int XrdOssIntegrityPages::UpdateRangeAligned(const void *const buff, const off_t
    return StoreRangeAligned(buff, offset, blen, sizes, nullptr);
 }
 
-void XrdOssIntegrityPages::LockRange(XrdOssIntegrityRangeGuard &rg, const off_t offset, const size_t blen, const bool rdonly)
+//
+// LockRange: byte range lock [offset, offend)
+//
+// offset - byte offset to apply lock
+// offend - end of range byte (excluding byte at end)
+// rdonly - readonly lock
+//
+void XrdOssIntegrityPages::LockRange(XrdOssIntegrityRangeGuard &rg, const off_t offset, const off_t offend, const bool rdonly)
 {
-   if (blen==0) return;
+   if (offset == offend) return;
 
    {
       XrdSysMutexHelper lck(rangeaddmtx_);
@@ -332,13 +339,15 @@ void XrdOssIntegrityPages::LockRange(XrdOssIntegrityRangeGuard &rg, const off_t 
 
       const off_t p1 = (offset>trackinglen ? trackinglen : offset) / XrdSys::PageSize;
       bool unlock = false;
-      if (!rdonly && offset+blen <= static_cast<size_t>(trackinglen))
+      if (!rdonly && offend <= trackinglen)
       {
          unlock = true;
       }
 
-      off_t p2 = (offset+blen) / XrdSys::PageSize;
-      const size_t p2_off = (offset+blen) % XrdSys::PageSize;
+      off_t p2 = offend / XrdSys::PageSize;
+      const size_t p2_off = offend % XrdSys::PageSize;
+
+      // range is exclusive
       if (p2_off ==0) p2--;
 
       ranges_.AddRange(p1, p2, rg, rdonly);

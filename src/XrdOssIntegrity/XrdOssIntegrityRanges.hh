@@ -112,6 +112,9 @@ public:
       }
    }
 
+   //
+   // AddRange: add an inclusive range lock on pages [start, end]
+   //
    void AddRange(const off_t start, const off_t end, XrdOssIntegrityRangeGuard &rg, bool rdonly)
    {
       std::unique_lock<std::mutex> lck(rmtx_);

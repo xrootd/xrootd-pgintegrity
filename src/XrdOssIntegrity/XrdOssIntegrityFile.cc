@@ -306,7 +306,7 @@ ssize_t XrdOssIntegrityFile::Read(void *buff, off_t offset, size_t blen)
    if (!pages_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, blen, true);
+   pages_->LockRange(rg, offset, offset+blen, true);
 
    const ssize_t bread = successor_->Read(buff, offset, blen);
    if (bread<0 || blen==0) return bread;
@@ -325,7 +325,7 @@ ssize_t XrdOssIntegrityFile::ReadRaw(void *buff, off_t offset, size_t blen)
    if (!pages_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, blen, true);
+   pages_->LockRange(rg, offset, offset+blen, true);
 
    const ssize_t bread = successor_->ReadRaw(buff, offset, blen);
    if (bread<0 || blen==0) return bread;
@@ -354,7 +354,7 @@ ssize_t XrdOssIntegrityFile::ReadV(XrdOucIOVec *readV, int n)
       if (p1<start) start = p1;
       if (p2>end) end = p2;
    }
-   pages_->LockRange(rg, start, end-start+1, true);
+   pages_->LockRange(rg, start, end, true);
 
    // standard OSS gives -ESPIPE in case of partial read of an element
    ssize_t rret = successor_->ReadV(readV, n);
@@ -378,7 +378,7 @@ ssize_t XrdOssIntegrityFile::Write(const void *buff, off_t offset, size_t blen)
    if (rdonly_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, blen, false);
+   pages_->LockRange(rg, offset, offset+blen, false);
 
    int puret = pages_->UpdateRange(successor_, buff, offset, blen, rg);
    if (puret<0)
@@ -421,7 +421,7 @@ ssize_t XrdOssIntegrityFile::WriteV(XrdOucIOVec *writeV, int n)
       if (p1<start) start = p1;
       if (p2>end) end = p2;
    }
-   pages_->LockRange(rg, start, end-start+1, false);
+   pages_->LockRange(rg, start, end, false);
 
    for (int i=0; i<n; i++)
    {
@@ -451,7 +451,7 @@ ssize_t XrdOssIntegrityFile::pgRead(void *buffer, off_t offset, size_t rdlen, ui
    if ((rdlen % XrdSys::PageSize) != 0) return -EINVAL;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, rdlen, true);
+   pages_->LockRange(rg, offset, offset+rdlen, true);
 
    ssize_t toread = rdlen;
    ssize_t bread = 0;
@@ -488,7 +488,7 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
    }
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, offset, wrlen, false);
+   pages_->LockRange(rg, offset, offset+wrlen, false);
 
    int puret = pages_->StoreRange(successor_, buffer, offset, wrlen, csvec, rg);
    if (puret<0) {
@@ -530,7 +530,7 @@ int XrdOssIntegrityFile::Ftruncate(unsigned long long flen)
    if (rdonly_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockRange(rg, flen, LLONG_MAX-flen, false);
+   pages_->LockRange(rg, flen, LLONG_MAX, false);
    int ret = pages_->truncate(successor_, flen, rg);
    if (ret<0)
    {

@@ -60,7 +60,8 @@ int XrdOssIntegrityFile::Read(XrdSfsAio *aiop)
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aiop, this, false, 0, true);
-   pages_->LockRange(nio->rg_, (off_t)aiop->sfsAio.aio_offset, (size_t)aiop->sfsAio.aio_nbytes, true);
+   pages_->LockRange(nio->rg_, (off_t)aiop->sfsAio.aio_offset,
+                               (off_t)(aiop->sfsAio.aio_offset+aiop->sfsAio.aio_nbytes), true);
    return successor_->Read(nio);
 }
 
@@ -71,7 +72,8 @@ int XrdOssIntegrityFile::Write(XrdSfsAio *aiop)
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aiop, this, false, 0, false);
-   pages_->LockRange(nio->rg_, (off_t)aiop->sfsAio.aio_offset, (size_t)aiop->sfsAio.aio_nbytes, false);
+   pages_->LockRange(nio->rg_, (off_t)aiop->sfsAio.aio_offset,
+                               (off_t)(aiop->sfsAio.aio_offset+aiop->sfsAio.aio_nbytes), false);
    return nio->SchedWriteJob();
 }
 
@@ -84,7 +86,8 @@ int XrdOssIntegrityFile::pgRead (XrdSfsAio *aioparm, uint64_t opts)
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, opts, true);
-   pages_->LockRange(nio->rg_, (off_t)aioparm->sfsAio.aio_offset, (size_t)aioparm->sfsAio.aio_nbytes, true);
+   pages_->LockRange(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
+                               (off_t)(aioparm->sfsAio.aio_offset+aioparm->sfsAio.aio_nbytes), true);
    return successor_->Read(nio);
 }
 
@@ -104,7 +107,8 @@ int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, opts, false);
-   pages_->LockRange(nio->rg_, (off_t)aioparm->sfsAio.aio_offset, (size_t)aioparm->sfsAio.aio_nbytes, false);
+   pages_->LockRange(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
+                               (off_t)(aioparm->sfsAio.aio_offset+aioparm->sfsAio.aio_nbytes), false);
    return nio->SchedWriteJob();
 }
 
