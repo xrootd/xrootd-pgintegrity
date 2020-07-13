@@ -320,16 +320,20 @@ namespace XrdCl
       }
     }
     ServerResponseStatus *srsp = (ServerResponseStatus *)message->GetBuffer();
-    const uint32_t bs = ntohl(srsp->hdr.dlen);
+    const uint32_t resplen = ntohl(srsp->hdr.dlen);
+
+    if (resplen < 16 || resplen > INT_MAX)
+      return Status( stError, errInternal );
+
     const uint16_t st = ntohs(srsp->hdr.status);
-    if (st == kXR_status && message->GetCursor() < bs+8)
+    if (st == kXR_status && message->GetCursor() < resplen+8)
     {
-      if( message->GetCursor() == 8 && message->GetSize() < bs+8 )
-        message->ReAllocate( bs+8 );
+      if( message->GetCursor() == 8 && message->GetSize() < resplen+8 )
+        message->ReAllocate( resplen+8 );
 
       srsp = (ServerResponseStatus *)message->GetBuffer();
 
-      size_t leftToBeRead = bs+8 - message->GetCursor();
+      size_t leftToBeRead = resplen+8 - message->GetCursor();
       while( leftToBeRead )
       {
         int bytesRead = 0;
@@ -1168,8 +1172,13 @@ namespace XrdCl
         ms->hdr.streamid[1] != ms->bdy.streamID[1])
       return Status( stError, errInternal );
 
+    const uint32_t resplen = ntohl(ms->hdr.dlen);
+
+    if (resplen < 4)
+      return Status( stError, errInternal );
+
     const uint32_t crc32v = ntohl(ms->bdy.crc32c);
-    const uint32_t crc32c = XrdOucCRC::Calc32C(((uint8_t*)&ms->bdy.crc32c)+4, ntohl(ms->hdr.dlen)-4, 0U);
+    const uint32_t crc32c = XrdOucCRC::Calc32C(((uint8_t*)&ms->bdy.crc32c)+4, resplen-4, 0U);
 
     if (crc32v != crc32c)
       return Status( stError, errCheckSumError );

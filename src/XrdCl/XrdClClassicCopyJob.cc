@@ -612,7 +612,7 @@ namespace
         pMaxNbConn = val - 1; // account for the control stream
 
         // for pgRead round up chunk size to whole number of pages
-        pChunkSizePG = std::min(pChunkSize, 0xfffff000U);
+        pChunkSizePG = std::min(pChunkSize, uint32_t(INT_MAX & ~XrdSys::PageMask));
         pChunkSizePG = (pChunkSizePG + XrdSys::PageMask) & ~XrdSys::PageMask;
       }
 
@@ -1110,7 +1110,7 @@ namespace
         pChunkSize( chunkSize ), pDone( false )
       {
         // round up to whole number of pages
-        pChunkSize = std::min(pChunkSize, 0xfffff000U);
+        pChunkSize = std::min(pChunkSize, uint32_t(INT_MAX & ~XrdSys::PageMask));
         pChunkSize = (pChunkSize + XrdSys::PageMask) & ~XrdSys::PageMask;
       }
 
