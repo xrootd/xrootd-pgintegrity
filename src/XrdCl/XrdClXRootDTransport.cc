@@ -280,85 +280,122 @@ namespace XrdCl
   }
 
   //----------------------------------------------------------------------------
-  // Read message header from socket
+  // Read from socket until the message cursor it at (or beyond) target
+  // Returns the number of bytes read or -1 in case of error
+  //----------------------------------------------------------------------------
+  ssize_t XRootDTransport::ReadUntilCursor(Message *message, Socket *socket,
+                                           uint32_t target, Status &st)
+  {
+    if( message->GetSize() < target )
+      message->ReAllocate( target );
+
+    st = Status( stOK, suDone );
+
+    if( message->GetCursor() < target )
+    {
+      size_t leftToBeRead = target - message->GetCursor();
+      size_t totRead = 0;
+      while( leftToBeRead )
+      {
+       	int bytesRead = 0;
+        st = socket->Read( message->GetBufferAtCursor(), leftToBeRead, bytesRead );
+
+        if( !st.IsOK() || st.code == suRetry )
+          return -1;
+
+        leftToBeRead -= bytesRead;
+        totRead += bytesRead;
+        message->AdvanceCursor( bytesRead );
+      }
+      return totRead;
+    }
+    return 0;
+  }
+
+  //----------------------------------------------------------------------------
+  // Read message header from socket.
+  //   For most response types the header is 8 bytes
+  //   For kXR_status this is the first 8 bytes + resplen
+  //   Content to this point are changed from network to host byte order.
+  //
+  //   For kXR_attn portions of the body are also read
+  //     In any case 4 bytes of body (i.e. actnum value)
+  //     In case kXR_asynresp 16 bytes of body (i.e. first 8 bytes of the async response)
+  //     In case kXR_asynresp 16+resplen where the async response is kXR_status
   //----------------------------------------------------------------------------
   Status XRootDTransport::GetHeader( Message *message, Socket *socket )
   {
-    //--------------------------------------------------------------------------
-    // A new message - allocate the space needed for the header
-    //--------------------------------------------------------------------------
-    if( message->GetCursor() == 0 && message->GetSize() < 8 )
-      message->Allocate( 8 );
-
-    //--------------------------------------------------------------------------
-    // Read the message header
-    //--------------------------------------------------------------------------
-    if( message->GetCursor() < 8 )
+    uint32_t expcur = 0;
+    uint32_t navail = 0;
+    uint32_t totMsgSize = 0;
+    while(1)
     {
-      size_t leftToBeRead = 8 - message->GetCursor();
-      while( leftToBeRead )
+      Status st;
+      uint32_t hl = 8;
+      ssize_t nr = ReadUntilCursor(message, socket, expcur+8, st);
+      if (nr<0) return st;
+      ServerResponseHeader *header = (ServerResponseHeader *)message->GetBuffer(expcur);
+      if (ntohs(header->status) == kXR_status)
       {
-        int bytesRead = 0;
-        Status status = socket->Read( message->GetBufferAtCursor(), leftToBeRead, bytesRead );
-
-        if( !status.IsOK() || status.code == suRetry )
-          return status;
-
-        leftToBeRead -= bytesRead;
-        message->AdvanceCursor( bytesRead );
+        uint32_t resplen = ntohl(header->dlen);
+        if (resplen < XrdProto::kXR_statusBodyLen || resplen > INT_MAX)
+          return Status( stError, errInternal );
+        if (navail>0 && navail<8+resplen)
+          return Status( stError, errInternal );
+        nr = ReadUntilCursor(message, socket, expcur+8+resplen, st);
+        if (nr<0) return st;
+        if (nr>0 && !socket->IsEncrypted())
+        {
+          ServerResponseStatus *srsp = (ServerResponseStatus *)message->GetBuffer(expcur);
+          st = CheckStatusIntegrity( srsp );
+          if ( !st.IsOK() )
+            return st;
+          if (totMsgSize == 0)
+            totMsgSize = 8 + resplen + ntohl(srsp->bdy.dlen);
+        }
+        hl += resplen;
       }
-      ServerResponseHeader *header = (ServerResponseHeader *)message->GetBuffer();
-      if (ntohs(header->status) != kXR_status)
+      else if (totMsgSize == 0)
       {
-        UnMarshallHeader( message );
-        uint32_t bodySize = header->dlen;
-        Log *log = DefaultEnv::GetLog();
-        log->Dump( XRootDTransportMsg, "[msg: 0x%x] Expecting %d bytes of message "
-                   "body", message, bodySize );
-
-        return Status( stOK, suDone );
+        totMsgSize = 8 + ntohl(header->dlen);
       }
+      ServerResponseInfo sri;
+      st = GetServerResponseInfo( message->GetBuffer(expcur), message->GetSize()-expcur, true, sri );
+      if (!st.IsOK())
+        return st;
+      if (navail>0 && navail != sri.hlen+sri.idlen)
+        return Status( stError, errInternal );
+      expcur += hl;
+      if (sri.estatus == kXR_attn)
+      {
+        if (sri.idavail<4)
+          return Status( stError, errInternal );
+        nr = ReadUntilCursor( message, socket, expcur+4, st );
+        if (nr<0) return st;
+        ServerResponseBody_Attn *ra = (ServerResponseBody_Attn*)message->GetBuffer(expcur);
+        expcur += 4;
+        if( ra->actnum == (int32_t)htonl(kXR_asynresp) )
+        {
+          if (sri.idavail<16)
+            return Status( stError, errInternal );
+          nr = ReadUntilCursor( message, socket, expcur+4, st );
+          if (nr<0) return st;
+          expcur += 4;
+          navail = sri.idlen-8;
+          continue;
+        }
+      }
+      break;
     }
-    ServerResponseStatus *srsp = (ServerResponseStatus *)message->GetBuffer();
-    const uint32_t resplen = ntohl(srsp->hdr.dlen);
 
-    if (resplen < 16 || resplen > INT_MAX)
-      return Status( stError, errInternal );
+    UnMarshallHeader( message );
 
-    const uint16_t st = ntohs(srsp->hdr.status);
-    if (st == kXR_status && message->GetCursor() < resplen+8)
-    {
-      if( message->GetCursor() == 8 && message->GetSize() < resplen+8 )
-        message->ReAllocate( resplen+8 );
+    Log *log = DefaultEnv::GetLog();
+    log->Dump( XRootDTransportMsg, "[msg: 0x%x] Read %d bytes of header. "
+               "Expecting %d bytes of message body", message, expcur,
+               totMsgSize - expcur );
 
-      srsp = (ServerResponseStatus *)message->GetBuffer();
-
-      size_t leftToBeRead = resplen+8 - message->GetCursor();
-      while( leftToBeRead )
-      {
-        int bytesRead = 0;
-        Status status = socket->Read( message->GetBufferAtCursor(), leftToBeRead, bytesRead );
-
-        if( !status.IsOK() || status.code == suRetry )
-          return status;
-
-        leftToBeRead -= bytesRead;
-        message->AdvanceCursor( bytesRead );
-      }
-      if (!socket->IsEncrypted())
-      {
-        Status status = CheckStatusIntegrity( message );
-        if ( !status.IsOK() )
-          return status;
-      }
-      UnMarshallHeader( message );
-      uint32_t bodySize = srsp->bdy.dlen;
-      Log *log = DefaultEnv::GetLog();
-      log->Dump( XRootDTransportMsg, "[msg: 0x%x] Expecting %d bytes of status message "
-                 "body", message, bodySize );
-      return Status( stOK, suDone );
-    }
-    return Status( stError, errInternal );
+    return Status( stOK, suDone );
   }
 
   //----------------------------------------------------------------------------
@@ -369,37 +406,20 @@ namespace XrdCl
     //--------------------------------------------------------------------------
     // Retrieve the body
     //--------------------------------------------------------------------------
-    size_t   leftToBeRead = 0;
-    uint32_t bodySize;
+    uint32_t bodySize = 0;
     {
       ServerResponseStatus *srsp = (ServerResponseStatus *)message->GetBuffer();
       bodySize = srsp->hdr.dlen;
       if (srsp->hdr.status == kXR_status)
       {
         bodySize += srsp->bdy.dlen;
-        if ( message->GetCursor() == srsp->hdr.dlen + 8U)
-          message->ReAllocate( bodySize + 8 );
-      }
-      else
-      {
-        if( message->GetCursor() == 8 )
-          message->ReAllocate( bodySize + 8 );
       }
     }
 
-    leftToBeRead = bodySize-(message->GetCursor()-8);
-    while( leftToBeRead )
-    {
-      int bytesRead = 0;
-      Status status = socket->Read( message->GetBufferAtCursor(), leftToBeRead, bytesRead );
+    Status st;
+    ssize_t nr = ReadUntilCursor(message, socket, bodySize+8, st);
+    if (nr<0) return st;
 
-      if( !status.IsOK() || status.code == suRetry )
-        return status;
-
-      leftToBeRead -= bytesRead;
-      message->AdvanceCursor( bytesRead );
-    }
-    message->SetHasBody(true);
     return Status( stOK, suDone );
   }
 
@@ -1164,10 +1184,8 @@ namespace XrdCl
   //----------------------------------------------------------------------------
   // Check kXR_status header integrity
   //----------------------------------------------------------------------------
-  Status XRootDTransport::CheckStatusIntegrity( Message *msg )
+  Status XRootDTransport::CheckStatusIntegrity( ServerResponseStatus *ms )
   {
-    ServerResponseStatus *ms = (ServerResponseStatus *)msg->GetBuffer();
-
     if (ms->hdr.streamid[0] != ms->bdy.streamID[0] ||
         ms->hdr.streamid[1] != ms->bdy.streamID[1])
       return Status( stError, errInternal );

@@ -125,84 +125,65 @@ namespace XrdCl
       }
     }
 
-    if( msg->GetSize() < 8 )
+    XRootDTransport::ServerResponseInfo sri;
+    Status st = XRootDTransport::GetServerResponseInfo( msg->GetBuffer(), msg->GetSize(), false, sri );
+    if (!st.IsOK())
       return Ignore;
 
-    ServerResponse *rsp    = (ServerResponse *)msg->GetBuffer();
-    ServerResponseStatus *srsp = nullptr;
     ClientRequest  *req    = (ClientRequest *)pRequest->GetBuffer();
-    uint16_t        status = 0;
-    uint32_t        dlen   = 0;
 
     //--------------------------------------------------------------------------
     // We got an async message
     //--------------------------------------------------------------------------
-    if( rsp->hdr.status == kXR_attn )
+    if( sri.estatus == kXR_attn )
     {
-      if( msg->GetSize() < 12 )
+      if( sri.idavail < 4 )
         return Ignore;
 
       //------------------------------------------------------------------------
       // We only care about async responses
       //------------------------------------------------------------------------
-      if( rsp->body.attn.actnum != (int32_t)htonl(kXR_asynresp) )
+      ServerResponseBody_Attn *ra = (ServerResponseBody_Attn*)sri.idata;
+      if( ra->actnum != (int32_t)htonl(kXR_asynresp) )
         return Ignore;
 
-      if( msg->GetSize() < 24 )
+      if( sri.idavail < 16 )
         return Ignore;
 
       //------------------------------------------------------------------------
-      // Check if the message has the stream ID that we're interested in
+      // Get the information about the embedded response
       //------------------------------------------------------------------------
-      ServerResponse *embRsp = (ServerResponse*)msg->GetBuffer(16);
-      if( embRsp->hdr.streamid[0] != req->header.streamid[0] ||
-          embRsp->hdr.streamid[1] != req->header.streamid[1] )
+
+      const uint32_t attnDlen = sri.idlen;
+
+      st = XRootDTransport::GetServerResponseInfo( sri.idata+8, sri.idavail-8, true, sri );
+      if (!st.IsOK())
         return Ignore;
 
-      status = ntohs( embRsp->hdr.status );
-      dlen   = ntohl( embRsp->hdr.dlen );
+      //------------------------------------------------------------------------
+      // Check lengths are consistent between attn and embedded response
+      //------------------------------------------------------------------------
 
-      if (status == kXR_status)
-      {
-        if (msg->GetSize() < 24+dlen)
-          return Ignore;
-
-        srsp = (ServerResponseStatus*)embRsp;
-        const uint16_t reqId = ntohs( req->header.requestid );
-
-        if (reqId != srsp->bdy.requestid+kXR_1stRequest)
-          return Ignore;
-
-        status = (srsp->bdy.resptype == XrdProto::kXR_FinalResult) ? kXR_ok : kXR_oksofar;
-        dlen = ntohl(srsp->bdy.dlen);
-      }
+      if (attnDlen != 8 + sri.hlen + sri.idlen)
+        return Ignore;
     }
+
     //--------------------------------------------------------------------------
-    // We got a sync message - check if it belongs to us
+    // In either case, sync or async - check if it belongs to us
     //--------------------------------------------------------------------------
-    else
+    if( sri.sid[0] != req->header.streamid[0] ||
+        sri.sid[1] != req->header.streamid[1] )
+      return Ignore;
+
+    //--------------------------------------------------------------------------
+    // If available, check reported request id matches our request
+    //--------------------------------------------------------------------------
+    if (sri.isKxrStatus)
     {
-      if( rsp->hdr.streamid[0] != req->header.streamid[0] ||
-          rsp->hdr.streamid[1] != req->header.streamid[1] )
+      const uint16_t reqId = ntohs( req->header.requestid );
+
+      if (reqId != sri.reqid)
         return Ignore;
-
-      status = rsp->hdr.status;
-      dlen   = rsp->hdr.dlen;
-
-      if (status == kXR_status)
-      {
-        if (msg->GetSize() < 8+dlen)
-          return Ignore;
-
-        srsp = (ServerResponseStatus*)rsp;
-        const uint16_t reqId = ntohs( req->header.requestid );
-
-        if (reqId != srsp->bdy.requestid+kXR_1stRequest)
-          return Ignore;
-
-        status = (srsp->bdy.resptype == XrdProto::kXR_FinalResult) ? kXR_ok : kXR_oksofar;
-        dlen = srsp->bdy.dlen;
-      }
     }
 
     //--------------------------------------------------------------------------
@@ -218,7 +199,7 @@ namespace XrdCl
     pResponse = msg;
 
     Log *log = DefaultEnv::GetLog();
-    switch( status )
+    switch( sri.estatus )
     {
       //------------------------------------------------------------------------
       // Handle the cached cases
@@ -248,19 +229,19 @@ namespace XrdCl
         // already (handler installed to late and the message has been cached)
         //----------------------------------------------------------------------
         uint16_t reqId = ntohs( req->header.requestid );
-        if( reqId == kXR_read && !msg->HasBody() )
+        if( reqId == kXR_read && !sri.hasallidata )
         {
           pReadRawStarted = false;
-          pAsyncMsgSize   = dlen;
+          pAsyncMsgSize   = sri.rawdlen;
           return Take | Raw | RemoveHandler;
         }
 
         //----------------------------------------------------------------------
         // kXR_readv is the same as kXR_read
         //----------------------------------------------------------------------
-        if( reqId == kXR_readv && !msg->HasBody() )
+        if( reqId == kXR_readv && !sri.hasallidata )
         {
-          pAsyncMsgSize      = dlen;
+          pAsyncMsgSize      = sri.rawdlen;
           pReadVRawMsgOffset = 0;
           return Take | Raw | RemoveHandler;
         }
@@ -295,10 +276,10 @@ namespace XrdCl
         uint16_t reqId = ntohs( req->header.requestid );
         if( reqId == kXR_read )
         {
-          if( !msg->HasBody() )
+          if( !sri.hasallidata )
           {
             pReadRawStarted = false;
-            pAsyncMsgSize   = dlen;
+            pAsyncMsgSize   = sri.rawdlen;
 #if __cplusplus >= 201103L
             pTimeoutFence = true;
 #else
@@ -308,7 +289,7 @@ namespace XrdCl
           }
           else
           {
-            pReadRawCurrentOffset += dlen;
+            pReadRawCurrentOffset += sri.rawdlen;
             return Take | ( pOksofarAsAnswer ? 0 : NoProcess );
           }
         }
@@ -318,9 +299,9 @@ namespace XrdCl
         //----------------------------------------------------------------------
         if( reqId == kXR_readv )
         {
-          if( !msg->HasBody() )
+          if( !sri.hasallidata )
           {
-            pAsyncMsgSize      = dlen;
+            pAsyncMsgSize      = sri.rawdlen;
             pReadVRawMsgOffset = 0;
 #if __cplusplus >= 201103L
             pTimeoutFence = true;
@@ -361,42 +342,53 @@ namespace XrdCl
   {
     Log *log = DefaultEnv::GetLog();
 
-    ServerResponse *rsp = (ServerResponse *)msg->GetBuffer();
-    ClientRequest  *req = (ClientRequest *)pRequest->GetBuffer();
+    XRootDTransport::ServerResponseInfo sri;
+    Status st = XRootDTransport::GetServerResponseInfo( msg->GetBuffer(), msg->GetSize(), false, sri );
 
+    if (!st.IsOK())
+    {
+      pStatus = Status( stFatal, errInvalidMessage );
+      HandleResponse();
+      return;
+    }
+
+    ClientRequest  *req = (ClientRequest *)pRequest->GetBuffer();
     //--------------------------------------------------------------------------
     // We got an async message
     //--------------------------------------------------------------------------
-    if( rsp->hdr.status == kXR_attn )
+    if( sri.estatus == kXR_attn )
     {
       log->Dump( XRootDMsg, "[%s] Got an async response to message %s, "
                  "processing it", pUrl.GetHostId().c_str(),
                  pRequest->GetDescription().c_str() );
-      Message *embededMsg = new Message( rsp->hdr.dlen-8 );
-      embededMsg->Append( msg->GetBuffer( 16 ), rsp->hdr.dlen-8 );
+      Message *embededMsg = new Message( sri.idlen-8 );
+      embededMsg->Append( sri.idata+8, sri.idlen-8 );
       XRDCL_SMART_PTR_T<Message> msgPtr( msg );
       pResponse = embededMsg; // this can never happen for oksofars
 
       // we need to unmarshall the header by hand
       XRootDTransport::UnMarshallHeader( embededMsg );
 
-      //------------------------------------------------------------------------
-      // Check if the dlen field of the embedded message is consistent with
-      // the dlen value of the original message
-      //------------------------------------------------------------------------
-      ServerResponse *embRsp = (ServerResponse *)embededMsg->GetBuffer();
-      size_t bl = embRsp->hdr.dlen;
-      if ( embRsp->hdr.status == kXR_status)
+      const uint32_t attnDlen = sri.idlen;
+
+      st = XRootDTransport::GetServerResponseInfo( embededMsg->GetBuffer(), embededMsg->GetSize(), false, sri );
+      if (!st.IsOK())
       {
-        ServerResponseStatus *embRsps = (ServerResponseStatus *)embededMsg->GetBuffer();
-        bl += embRsps->bdy.dlen;
+        pStatus = Status( stFatal, errInvalidMessage );
+        HandleResponse();
+        return;
       }
-      if( bl != rsp->hdr.dlen-16U )
+
+      //------------------------------------------------------------------------
+      // Check lengths are consistent between attn and embedded response
+      //------------------------------------------------------------------------
+
+      if( attnDlen != 8 + sri.hlen + sri.idlen )
       {
         log->Error( XRootDMsg, "[%s] Sizes of the async response to %s and the "
                     "embedded message are inconsistent. Expected %d, got %d.",
                     pUrl.GetHostId().c_str(), pRequest->GetDescription().c_str(),
-                    rsp->hdr.dlen-16, embRsp->hdr.dlen);
+                    attnDlen, 8+sri.hlen+sri.idlen);
 
         pStatus = Status( stFatal, errInvalidMessage );
         HandleResponse();
@@ -405,6 +397,19 @@ namespace XrdCl
 
       Process( embededMsg );
       return;
+    }
+
+    //--------------------------------------------------------------------------
+    // If available, check reported request id matches our request
+    //--------------------------------------------------------------------------
+    if (sri.isKxrStatus)
+    {
+      if (sri.reqid != ntohs(req->header.requestid))
+      {
+        pStatus = Status( stFatal, errInvalidMessage );
+        HandleResponse();
+        return;
+      }
     }
 
     //--------------------------------------------------------------------------
@@ -433,7 +438,7 @@ namespace XrdCl
     //--------------------------------------------------------------------------
     // Process the message
     //--------------------------------------------------------------------------
-    Status st = XRootDTransport::UnMarshallBody( msg, ntohs(req->header.requestid) );
+    st = XRootDTransport::UnMarshallBody( msg, ntohs(req->header.requestid) );
     if( !st.IsOK() )
     {
       pStatus = Status( stFatal, errInvalidMessage );
@@ -450,35 +455,11 @@ namespace XrdCl
     // Reset the aggregated wait (used to omit wait response in case of Metalink
     // redirector)
     //--------------------------------------------------------------------------
-    if( rsp->hdr.status != kXR_wait )
+    if( sri.estatus != kXR_wait )
       pAggregatedWaitTime = 0;
 
-    switch( rsp->hdr.status )
+    switch( sri.estatus )
     {
-      //------------------------------------------------------------------------
-      // kXR_status - we have a result, may or may not be complete
-      //------------------------------------------------------------------------
-      case kXR_status:
-      {
-        log->Dump( XRootDMsg, "[%s] Got a kXR_status response to request %s",
-                   pUrl.GetHostId().c_str(),
-                   pRequest->GetDescription().c_str() );
-        ServerResponseStatus *srsp = (ServerResponseStatus *)msg->GetBuffer();
-        if (srsp->bdy.requestid+kXR_1stRequest != ntohs(req->header.requestid))
-        {
-          pStatus = Status( stFatal, errInvalidMessage );
-          HandleResponse();
-          return;
-        }
-        if (srsp->bdy.resptype == XrdProto::kXR_FinalResult) {
-          pStatus   = Status();
-        } else {
-          pStatus   = Status( stOK, suContinue );
-        }
-        HandleResponse();
-        return;
-      }
-
       //------------------------------------------------------------------------
       // kXR_ok - we're done here
       //------------------------------------------------------------------------
@@ -510,15 +491,16 @@ namespace XrdCl
       //------------------------------------------------------------------------
       case kXR_error:
       {
-        char *errmsg = new char[rsp->hdr.dlen-3]; errmsg[rsp->hdr.dlen-4] = 0;
-        memcpy( errmsg, rsp->body.error.errmsg, rsp->hdr.dlen-4 );
+        char *errmsg = new char[sri.idlen-3]; errmsg[sri.idlen-4] = 0;
+        ServerResponseBody_Error *se = (ServerResponseBody_Error*)sri.idata;
+        memcpy( errmsg, se->errmsg, sri.idlen-4 );
         log->Dump( XRootDMsg, "[%s] Got a kXR_error response to request %s "
                    "[%d] %s", pUrl.GetHostId().c_str(),
-                   pRequest->GetDescription().c_str(), rsp->body.error.errnum,
+                   pRequest->GetDescription().c_str(), se->errnum,
                    errmsg );
         delete [] errmsg;
 
-        HandleError( Status(stError, errErrorResponse, rsp->body.error.errnum),
+        HandleError( Status(stError, errErrorResponse, se->errnum),
                      pResponse );
         return;
       }
@@ -531,7 +513,7 @@ namespace XrdCl
         XRDCL_SMART_PTR_T<Message> msgPtr( pResponse );
         pResponse = 0;
 
-        if( rsp->hdr.dlen <= 4 )
+        if( sri.idlen <= 4 )
         {
           log->Error( XRootDMsg, "[%s] Got invalid redirect response.",
                       pUrl.GetHostId().c_str() );
@@ -540,15 +522,16 @@ namespace XrdCl
           return;
         }
 
-        char *urlInfoBuff = new char[rsp->hdr.dlen-3];
-        urlInfoBuff[rsp->hdr.dlen-4] = 0;
-        memcpy( urlInfoBuff, rsp->body.redirect.host, rsp->hdr.dlen-4 );
+        char *urlInfoBuff = new char[sri.idlen-3];
+        urlInfoBuff[sri.idlen-4] = 0;
+        ServerResponseBody_Redirect *sr = (ServerResponseBody_Redirect*)sri.idata;
+        memcpy( urlInfoBuff, sr->host, sri.idlen-4 );
         std::string urlInfo = urlInfoBuff;
         delete [] urlInfoBuff;
         log->Dump( XRootDMsg, "[%s] Got kXR_redirect response to "
                    "message %s: %s, port %d", pUrl.GetHostId().c_str(),
                    pRequest->GetDescription().c_str(), urlInfo.c_str(),
-                   rsp->body.redirect.port );
+                   sr->port );
 
         //----------------------------------------------------------------------
         // Check if we can proceed
@@ -615,8 +598,8 @@ namespace XrdCl
         std::ostringstream o;
 
         o << urlComponents[0];
-        if( rsp->body.redirect.port != -1 )
-          o << ":" << rsp->body.redirect.port << "/";
+        if( sr->port != -1 )
+          o << ":" << sr->port << "/";
 
         URL newUrl = URL( o.str() );
         if( !newUrl.IsValid() )
@@ -737,17 +720,18 @@ namespace XrdCl
         pResponse = 0;
         uint32_t waitSeconds = 0;
 
-        if( rsp->hdr.dlen >= 4 )
+        if( sri.idlen >= 4 )
         {
-          char *infoMsg = new char[rsp->hdr.dlen-3];
-          infoMsg[rsp->hdr.dlen-4] = 0;
-          memcpy( infoMsg, rsp->body.wait.infomsg, rsp->hdr.dlen-4 );
+          char *infoMsg = new char[sri.idlen-3];
+          infoMsg[sri.idlen-4] = 0;
+          ServerResponseBody_Wait *sw = (ServerResponseBody_Wait*)sri.idata;
+          memcpy( infoMsg, sw->infomsg, sri.idlen-4 );
           log->Dump( XRootDMsg, "[%s] Got kXR_wait response of %d seconds to "
                      "message %s: %s", pUrl.GetHostId().c_str(),
-                     rsp->body.wait.seconds, pRequest->GetDescription().c_str(),
+                     sw->seconds, pRequest->GetDescription().c_str(),
                      infoMsg );
           delete [] infoMsg;
-          waitSeconds = rsp->body.wait.seconds;
+          waitSeconds = sw->seconds;
         }
         else
         {
@@ -822,7 +806,7 @@ namespace XrdCl
         XRDCL_SMART_PTR_T<Message> msgPtr( pResponse );
         pResponse = 0;
 
-        if( rsp->hdr.dlen < 4 )
+        if( sri.idlen < 4 )
         {
           log->Error( XRootDMsg, "[%s] Got invalid waitresp response.",
                       pUrl.GetHostId().c_str() );
@@ -831,9 +815,10 @@ namespace XrdCl
           return;
         }
 
+        ServerResponseBody_Waitresp *swr = (ServerResponseBody_Waitresp*)sri.idata;
         log->Dump( XRootDMsg, "[%s] Got kXR_waitresp response of %d seconds to "
                    "message %s", pUrl.GetHostId().c_str(),
-                   rsp->body.waitresp.seconds,
+                   swr->seconds,
                    pRequest->GetDescription().c_str() );
         return;
       }
@@ -847,7 +832,7 @@ namespace XrdCl
         pResponse = 0;
         log->Dump( XRootDMsg, "[%s] Got unrecognized response %d to "
                    "message %s", pUrl.GetHostId().c_str(),
-                   rsp->hdr.status, pRequest->GetDescription().c_str() );
+                   sri.estatus, pRequest->GetDescription().c_str() );
         pStatus   = Status( stError, errInvalidResponse );
         HandleResponse();
         return;
@@ -1383,16 +1368,26 @@ namespace XrdCl
   XRootDStatus *XRootDMsgHandler::ProcessStatus()
   {
     XRootDStatus   *st  = new XRootDStatus( pStatus );
-    ServerResponse *rsp = 0;
-    if( pResponse )
-      rsp = (ServerResponse *)pResponse->GetBuffer();
 
-    if( !pStatus.IsOK() && rsp )
+    ServerResponseBody_Error *se = nullptr;
+    uint32_t dlen = 0;
+    if ( pResponse )
+    {
+      XRootDTransport::ServerResponseInfo sri;
+      Status ist = XRootDTransport::GetServerResponseInfo( pResponse->GetBuffer(), pResponse->GetSize(), false, sri );
+      if (ist.IsOK())
+      {
+        se = (ServerResponseBody_Error*)sri.idata;
+        dlen = sri.idlen;
+      }
+    }
+
+    if( !pStatus.IsOK() && se )
     {
       if( pStatus.code == errErrorResponse )
       {
-        st->errNo = rsp->body.error.errnum;
-        std::string errmsg( rsp->body.error.errmsg, rsp->hdr.dlen-4 );
+        st->errNo = se->errnum;
+        std::string errmsg( se->errmsg, dlen-4 );
         if( st->errNo == kXR_noReplicas )
           errmsg += " Last seen error: " + pLastError.ToString();
         st->SetErrorMessage( errmsg );
@@ -1412,15 +1407,21 @@ namespace XrdCl
     if( !pResponse )
       return Status();
 
-    ServerResponse *rsp = (ServerResponse *)pResponse->GetBuffer();
-    ServerResponseStatus *srsp = (ServerResponseStatus*)pResponse->GetBuffer();
     ClientRequest  *req = (ClientRequest *)pRequest->GetBuffer();
     Log            *log = DefaultEnv::GetLog();
+
+    XRootDTransport::ServerResponseInfo sri;
+    Status st = XRootDTransport::GetServerResponseInfo( pResponse->GetBuffer(), pResponse->GetSize(), false, sri );
+    if (!st.IsOK())
+    {
+      log->Error( XRootDMsg, "Internal Error: unable to process response" );
+      return 0;
+    }
 
     //--------------------------------------------------------------------------
     // Handle redirect as an answer
     //--------------------------------------------------------------------------
-    if( rsp->hdr.status == kXR_redirect )
+    if( sri.estatus == kXR_redirect )
     {
       log->Error( XRootDMsg, "Internal Error: unable to process redirect" );
       return 0;
@@ -1435,13 +1436,8 @@ namespace XrdCl
     //--------------------------------------------------------------------------
     if( pPartialResps.empty() )
     {
-      buffer = rsp->body.buffer.data;
-      length = rsp->hdr.dlen;
-      if (rsp->hdr.status == kXR_status)
-      {
-        buffer = pResponse->GetBuffer(8+rsp->hdr.dlen);
-        length = srsp->bdy.dlen;
-      }
+      buffer = sri.idata;
+      length = sri.idlen;
     }
     //--------------------------------------------------------------------------
     // Partial answers, we need to glue them together before parsing
@@ -1452,39 +1448,26 @@ namespace XrdCl
     {
       for( uint32_t i = 0; i < pPartialResps.size(); ++i )
       {
-        ServerResponse *part = (ServerResponse*)pPartialResps[i]->GetBuffer();
-        if (part->hdr.status == kXR_status) {
-          ServerResponseStatus *spart = (ServerResponseStatus*)part;
-          length += spart->bdy.dlen;
-        } else {
-          length += part->hdr.dlen;
-        }
+        XRootDTransport::ServerResponseInfo sri2;
+        st = XRootDTransport::GetServerResponseInfo( pPartialResps[i]->GetBuffer(), pPartialResps[i]->GetSize(), false, sri2 );
+        if (!st.IsOK())
+          continue;
+        length += sri2.idlen;
       }
-      if (rsp->hdr.status == kXR_status) {
-        length += srsp->bdy.dlen;
-      } else {
-        length += rsp->hdr.dlen;
-      }
+      length += sri.idlen;
 
       buff.Allocate( length );
       uint32_t offset = 0;
       for( uint32_t i = 0; i < pPartialResps.size(); ++i )
       {
-        ServerResponse *part = (ServerResponse*)pPartialResps[i]->GetBuffer();
-        if (part->hdr.status == kXR_status) {
-          ServerResponseStatus *spart = (ServerResponseStatus*)part;
-          buff.Append(pPartialResps[i]->GetBuffer(8+part->hdr.dlen), spart->bdy.dlen, offset);
-          offset += spart->bdy.dlen;
-        } else {
-          buff.Append( part->body.buffer.data, part->hdr.dlen, offset );
-          offset += part->hdr.dlen;
-        }
+        XRootDTransport::ServerResponseInfo sri2;
+        st = XRootDTransport::GetServerResponseInfo( pPartialResps[i]->GetBuffer(), pPartialResps[i]->GetSize(), false, sri2 );
+        if (!st.IsOK())
+          continue;
+        buff.Append(sri2.idata, sri2.idlen, offset);
+        offset += sri2.idlen;
       }
-      if (rsp->hdr.status == kXR_status) {
-        buff.Append( pResponse->GetBuffer(8+rsp->hdr.dlen), srsp->bdy.dlen, offset );
-      } else {
-        buff.Append( rsp->body.buffer.data, rsp->hdr.dlen, offset );
-      }
+      buff.Append(sri.idata, sri.idlen, offset);
       buffer = buff.GetBuffer();
     }
 
@@ -1612,7 +1595,7 @@ namespace XrdCl
                    pUrl.GetHostId().c_str(),
                    pRequest->GetDescription().c_str() );
 
-        if( rsp->hdr.dlen < 8 )
+        if( sri.idlen < 8 )
         {
           log->Error( XRootDMsg, "[%s] Got invalid redirect response.",
                       pUrl.GetHostId().c_str() );
@@ -1620,8 +1603,9 @@ namespace XrdCl
         }
 
         AnyObject *obj = new AnyObject();
-        ProtocolInfo *data = new ProtocolInfo( rsp->body.protocol.pval,
-                                               rsp->body.protocol.flags );
+        ServerResponseBody_Protocol *sp = (ServerResponseBody_Protocol*)sri.idata;
+        ProtocolInfo *data = new ProtocolInfo( sp->pval,
+                                               sp->flags );
         obj->Set( data );
         response = obj;
         return Status();
@@ -1684,7 +1668,7 @@ namespace XrdCl
                    pUrl.GetHostId().c_str(),
                    pRequest->GetDescription().c_str() );
 
-        if( rsp->hdr.dlen < 4 )
+        if( sri.idlen < 4 )
         {
           log->Error( XRootDMsg, "[%s] Got invalid open response.",
                       pUrl.GetHostId().c_str() );
@@ -1703,11 +1687,11 @@ namespace XrdCl
                      pUrl.GetHostId().c_str(),
                      pRequest->GetDescription().c_str() );
 
-          if( rsp->hdr.dlen >= 12 )
+          if( sri.idlen >= 12 )
           {
-            char *nullBuffer = new char[rsp->hdr.dlen-11];
-            nullBuffer[rsp->hdr.dlen-12] = 0;
-            memcpy( nullBuffer, buffer+12, rsp->hdr.dlen-12 );
+            char *nullBuffer = new char[sri.idlen-11];
+            nullBuffer[sri.idlen-12] = 0;
+            memcpy( nullBuffer, buffer+12, sri.idlen-12 );
 
             statInfo = new StatInfo();
             if( statInfo->ParseServerResponse( nullBuffer ) == false )
@@ -1718,7 +1702,7 @@ namespace XrdCl
             delete [] nullBuffer;
           }
 
-          if( rsp->hdr.dlen < 12 || !statInfo )
+          if( sri.idlen < 12 || !statInfo )
           {
             log->Error( XRootDMsg, "[%s] Unable to parse StatInfo in response "
                         "to %s", pUrl.GetHostId().c_str(),
@@ -1759,7 +1743,7 @@ namespace XrdCl
 
         cksums.reserve( (chunk.length + (XrdProto::kXR_pgPageSZ - 1))/XrdProto::kXR_pgPageSZ );
 
-        if (srsp->bdy.dlen>0)
+        if (sri.idlen>0)
         {
           pPartialResps.push_back(pResponse);
           pResponse = 0;
@@ -1770,16 +1754,16 @@ namespace XrdCl
         //--------------------------------------------------------------------------
         for( uint32_t i = 0; i < pPartialResps.size(); ++i )
         {
+          XRootDTransport::ServerResponseInfo sri2;
+          st = XRootDTransport::GetServerResponseInfo( pPartialResps[i]->GetBuffer(), pPartialResps[i]->GetSize(), false, sri2 );
+          if (!st.IsOK())
+            return st;
+
           // must have the data
-          if (!pPartialResps[i]->HasBody())
+          if (!sri2.hasallidata)
             return Status( stError, errInvalidResponse );
 
-          ServerResponseStatus *srsp = (ServerResponseStatus *)pPartialResps[i]->GetBuffer();
-
-          // only expect kXR_status response
-          if (srsp->hdr.status != kXR_status)
-            return Status( stError, errInvalidResponse );
-          ServerResponseBody_pgRead *pgr = (ServerResponseBody_pgRead *)pPartialResps[i]->GetBuffer(24);
+          ServerResponseBody_pgRead *pgr = (ServerResponseBody_pgRead *)sri2.idata;
 
           // we should agree on the file offset these data are from
           if (pgr->offset != fileOffset)
@@ -1788,10 +1772,10 @@ namespace XrdCl
           //--------------------------------------------------------------------------
           // find nfull= number of full pages & nbremain= number of remaning bytes
           //--------------------------------------------------------------------------
-          const size_t nfull = srsp->bdy.dlen / XrdProto::kXR_pgUnitSZ;
+          const size_t nfull = sri2.rawdlen / XrdProto::kXR_pgUnitSZ;
           size_t nbremain;
           {
-            const size_t p1_off = srsp->bdy.dlen % XrdProto::kXR_pgUnitSZ;
+            const size_t p1_off = sri2.rawdlen % XrdProto::kXR_pgUnitSZ;
             // datapayload has include a whole number of CRC32C values preceeding a non-zero data block
             if (p1_off>0 && p1_off<=4)
               return Status( stError, errInvalidResponse );
@@ -1872,25 +1856,29 @@ namespace XrdCl
         char      *cursor        = (char*)chunk.buffer;
         for( uint32_t i = 0; i < pPartialResps.size(); ++i )
         {
-          ServerResponse *part = (ServerResponse*)pPartialResps[i]->GetBuffer();
 
-          if( currentOffset + part->hdr.dlen > chunk.length )
+          XRootDTransport::ServerResponseInfo sri2;
+          st = XRootDTransport::GetServerResponseInfo( pPartialResps[i]->GetBuffer(), pPartialResps[i]->GetSize(), false, sri2 );
+          if (!st.IsOK())
+            return st;
+
+          if( currentOffset + sri2.rawdlen > chunk.length )
           {
             sizeMismatch = true;
             break;
           }
 
-          if( pPartialResps[i]->HasBody() )
-            memcpy( cursor, part->body.buffer.data, part->hdr.dlen );
-          currentOffset += part->hdr.dlen;
-          cursor        += part->hdr.dlen;
+          if( sri2.hasallidata )
+            memcpy( cursor, sri2.rawdata, sri2.rawdlen );
+          currentOffset += sri2.rawdlen;
+          cursor        += sri2.rawdlen;
         }
 
-        if( currentOffset + rsp->hdr.dlen <= chunk.length )
+        if( currentOffset + sri.rawdlen <= chunk.length )
         {
-          if( pResponse->HasBody() )
-            memcpy( cursor, rsp->body.buffer.data, rsp->hdr.dlen );
-          currentOffset += rsp->hdr.dlen;
+          if( sri.hasallidata )
+            memcpy( cursor, sri.rawdata, sri.rawdlen );
+          currentOffset += sri.rawdlen;
         }
         else
           sizeMismatch = true;
@@ -1943,10 +1931,7 @@ namespace XrdCl
       //------------------------------------------------------------------------
       case kXR_fattr:
       {
-        int   len  = rsp->hdr.dlen;
-        char* data = rsp->body.buffer.data;
-
-        return ParseXAttrResponse( data, len, response );
+        return ParseXAttrResponse( sri.idata, sri.idlen, response );
       }
 
       //------------------------------------------------------------------------
@@ -2221,11 +2206,9 @@ namespace XrdCl
     // Unpack the stuff that needs to be unpacked
     //--------------------------------------------------------------------------
     for( uint32_t i = 0; i < pPartialResps.size(); ++i )
-      if( pPartialResps[i]->HasBody() )
-        UnPackReadVResponse( pPartialResps[i] );
+      UnPackReadVResponse( pPartialResps[i] );
 
-    if( pResponse->HasBody() )
-      UnPackReadVResponse( pResponse );
+    UnPackReadVResponse( pResponse );
 
     //--------------------------------------------------------------------------
     // See if all the chunks are OK and put them in the response
@@ -2251,21 +2234,24 @@ namespace XrdCl
   //----------------------------------------------------------------------------
   Status XRootDMsgHandler::UnPackReadVResponse( Message *msg )
   {
+    XRootDTransport::ServerResponseInfo sri;
+    Status st = XRootDTransport::GetServerResponseInfo( msg->GetBuffer(), msg->GetSize(), false, sri );
+
+    if (st.IsOK() && !sri.hasallidata)
+      return Status();
+
     Log *log = DefaultEnv::GetLog();
     log->Dump( XRootDMsg, "[%s] Handling response to %s: unpacking "
                "data from a cached message", pUrl.GetHostId().c_str(),
                pRequest->GetDescription().c_str() );
 
+    if (!st.IsOK())
+      return st;
+
     uint32_t  offset       = 0;
-    uint32_t  len          = msg->GetSize()-8;
+    uint32_t  len          = sri.idavail - (sri.idlen-sri.rawdlen);
     uint32_t  currentChunk = 0;
-    char     *cursor       = msg->GetBuffer(8);
-    ServerResponseStatus *srsp = (ServerResponseStatus *)msg->GetBuffer();
-    if (srsp->hdr.status == kXR_status)
-    {
-       len = srsp->bdy.dlen;
-       cursor = msg->GetBuffer(8+srsp->hdr.dlen);
-    }
+    char     *cursor       = sri.rawdata;
 
     while( 1 )
     {

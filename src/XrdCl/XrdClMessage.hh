@@ -33,7 +33,7 @@ namespace XrdCl
       //! Constructor
       //------------------------------------------------------------------------
       Message( uint32_t size = 0 ):
-        Buffer( size ), pIsMarshalled( false ), pHasBody(false), pSessionId(0)
+        Buffer( size ), pIsMarshalled( false ), pSessionId(0)
       {
         if( size )
           Zero();
@@ -58,22 +58,6 @@ namespace XrdCl
       void SetIsMarshalled( bool isMarshalled )
       {
         pIsMarshalled = isMarshalled;
-      }
-
-      //------------------------------------------------------------------------
-      //! Set the indication that the whole body has been read into message
-      //------------------------------------------------------------------------
-      void SetHasBody( bool hasBody )
-      {
-        pHasBody = hasBody;
-      }
-
-      //------------------------------------------------------------------------
-      //! Check if message has body
-      //------------------------------------------------------------------------
-      bool HasBody() const
-      {
-        return pHasBody;
       }
 
       //------------------------------------------------------------------------
@@ -110,7 +94,6 @@ namespace XrdCl
 
     private:
       bool         pIsMarshalled;
-      bool         pHasBody;
       uint64_t     pSessionId;
       std::string  pDescription;
   };

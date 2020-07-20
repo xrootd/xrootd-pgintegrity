@@ -406,13 +406,17 @@ namespace XrdCl
 {
   XRootDStatus Stream::RequestClose( Message *response )
   {
-    ServerResponse *rsp = reinterpret_cast<ServerResponse*>( response->GetBuffer() );
-    if( rsp->hdr.dlen < 4 ) return XRootDStatus( stError );
+    XRootDTransport::ServerResponseInfo sri;
+    Status st = XRootDTransport::GetServerResponseInfo( response->GetBuffer(), response->GetSize(), false, sri );
+    if (!st.IsOK())
+      return st;
+    ServerResponseBody_Buffer *rb = reinterpret_cast<ServerResponseBody_Buffer*>( sri.idata );
+    if( sri.idavail < 4 ) return XRootDStatus( stError );
     Message            *msg;
     ClientCloseRequest *req;
     MessageUtils::CreateRequest( msg, req );
     req->requestid = kXR_close;
-    memcpy( req->fhandle, reinterpret_cast<uint8_t*>( rsp->body.buffer.data ), 4 );
+    memcpy( req->fhandle, reinterpret_cast<uint8_t*>( rb->data ), 4 );
     XRootDTransport::SetDescription( msg );
     msg->SetSessionId( pSessionId );
     NullResponseHandler *handler = new NullResponseHandler();
@@ -476,8 +480,9 @@ namespace XrdCl
                  pStreamName.c_str(), msg->GetDescription().c_str() );
 
       // if we are handling oksofar we have to take down the timeout fence
-      ServerResponse *rsp = (ServerResponse *)msg->GetBuffer();
-      if( rsp->hdr.status == kXR_oksofar )
+      XRootDTransport::ServerResponseInfo sri;
+      Status st = XRootDTransport::GetServerResponseInfo( msg->GetBuffer(), msg->GetSize(), false, sri );
+      if (st.IsOK() && sri.estatus == kXR_oksofar )
       {
         XRootDMsgHandler *xrdHandler = dynamic_cast<XRootDMsgHandler*>( mh.handler );
         if( xrdHandler ) xrdHandler->TakeDownTimeoutFence();

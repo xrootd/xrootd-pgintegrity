@@ -30,6 +30,8 @@
 #include "XrdSec/XrdSecInterface.hh"
 #include "XrdOuc/XrdOucEnv.hh"
 
+#include <arpa/inet.h>
+
 class XrdSysPlugin;
 class XrdSecProtect;
 
@@ -181,7 +183,10 @@ namespace XrdCl
       //------------------------------------------------------------------------
       static Status UnMarshallBody( Message *msg, uint16_t reqType );
 
-      static Status CheckStatusIntegrity( Message *msg );
+      //------------------------------------------------------------------------
+      //!
+      //------------------------------------------------------------------------
+      static Status CheckStatusIntegrity( ServerResponseStatus *ms );
 
       //------------------------------------------------------------------------
       //! Unmarshall the header incoming message
@@ -254,7 +259,102 @@ namespace XrdCl
       virtual bool NeedEncryption( HandShakeData  *handShakeData,
                                   AnyObject      &channelData );
 
+      struct ServerResponseInfo
+      {
+        bool isKxrStatus;   // response is kXR_status
+        uint8_t *sid;       // pointer to streamid[2]
+        uint16_t estatus;   // equivalent response type (based on resptype or status)
+        uint32_t hlen;      // header length, excluding info or data portions
+
+        enum XRequestTypes reqid; // requestid (only in case isKxrStatus)
+
+        uint32_t idlen;     // length of info+data portions
+        uint32_t rawdlen;   // length of data only portion
+        uint32_t idavail;   // number of bytes actually available after start of info section
+        bool hasallidata;   // all bytes expected from info section onwards are available
+        char *idata;        // pointer to start of info section
+        char *rawdata;      // pointer to start of data section
+      };
+
+      //------------------------------------------------------------------------
+      //! Fills in a ServerResponseInfo objec with information from a buffer
+      //! containing a server response.
+      //------------------------------------------------------------------------
+      static Status GetServerResponseInfo( char *buff, const uint32_t bufflen,
+                                           const bool unmarshall,
+                                           ServerResponseInfo &sri )
+      {
+        if (bufflen < 8)
+          return Status( stError, errInternal );
+
+        ServerResponseHeader *srp = (ServerResponseHeader *)buff;
+
+        uint16_t hst = srp->status;
+        uint32_t resplen = srp->dlen;
+
+        sri.sid = srp->streamid;
+        if (unmarshall)
+        {
+          hst = ntohs(hst);
+          resplen = ntohl(resplen);
+        }
+
+        if (hst != kXR_status)
+        {
+          sri.isKxrStatus = false;
+          sri.estatus = hst;
+          sri.hlen = 8;
+          sri.reqid = kXR_1stRequest;  // not available for non kXR_status response
+          sri.idlen = resplen;         // for non kXR_status no info section
+          sri.rawdlen = resplen;
+          sri.idavail = bufflen - sri.hlen;
+          sri.hasallidata = (sri.hlen+sri.idlen <= bufflen);
+          sri.idata = buff + sri.hlen;
+          sri.rawdata = sri.idata;
+          return Status( stOK, suDone );
+        }
+
+        sri.hlen = 8 + XrdProto::kXR_statusBodyLen;
+
+        if (resplen < XrdProto::kXR_statusBodyLen || resplen > INT_MAX)
+          return Status( stError, errInternal );
+
+        if (bufflen < sri.hlen)
+          return Status( stError, errInternal );
+
+        ServerResponseStatus *srsp = (ServerResponseStatus *)buff;
+        sri.rawdlen = srsp->bdy.dlen;
+        if (unmarshall)
+        {
+          sri.rawdlen = ntohl(sri.rawdlen);
+        }
+        sri.estatus = srsp->bdy.resptype;
+        if (sri.estatus == XrdProto::kXR_FinalResult)
+        {
+          sri.estatus = kXR_ok;
+        }
+        else if (sri.estatus == XrdProto::kXR_PartialResult)
+        {
+          sri.estatus = kXR_oksofar;
+        }
+        sri.isKxrStatus = true;
+        sri.reqid = (enum XRequestTypes)(srsp->bdy.requestid + kXR_1stRequest);
+        sri.idlen = (resplen - XrdProto::kXR_statusBodyLen) + sri.rawdlen;
+        sri.idata = buff + sri.hlen;
+        sri.hasallidata = (sri.hlen+sri.idlen <= bufflen);
+        sri.idavail = bufflen - sri.hlen;
+        sri.rawdata = buff + 8 + resplen;
+        return Status( stOK, suDone );
+      }
+
     private:
+
+      //------------------------------------------------------------------------
+      // Read from socket until the message cursor it at (or beyond) target
+      // Returns the number of bytes read or -1 in case of error
+      //------------------------------------------------------------------------
+      ssize_t ReadUntilCursor(Message *message, Socket *socket, uint32_t target,
+                              Status &st);
 
       //------------------------------------------------------------------------
       // Hand shake the main stream

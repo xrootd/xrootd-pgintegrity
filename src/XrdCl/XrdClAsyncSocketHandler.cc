@@ -951,9 +951,16 @@ namespace XrdCl
     // It would be more coherent if this could be done in the
     // transport layer, unfortunately the API does not allow it.
     kXR_int32 waitSeconds = -1;
-    ServerResponse *rsp = (ServerResponse*)msg->GetBuffer();
-    if( rsp->hdr.status == kXR_wait )
-      waitSeconds = rsp->body.wait.seconds;
+
+    XRootDTransport::ServerResponseInfo sri;
+    Status st = XRootDTransport::GetServerResponseInfo( msg->GetBuffer(), msg->GetSize(), false, sri );
+
+    if( !st.IsOK())
+      return waitSeconds;
+
+    ServerResponseBody_Wait *rw = (ServerResponseBody_Wait*)sri.idata;
+    if( sri.estatus == kXR_wait )
+      waitSeconds = rw->seconds;
     return waitSeconds;
   }
 }

@@ -20,6 +20,7 @@
 #include "XrdCl/XrdClInQueue.hh"
 #include "XrdCl/XrdClPostMasterInterfaces.hh"
 #include "XrdCl/XrdClMessage.hh"
+#include "XrdCl/XrdClXRootDTransport.hh"
 
 #include <arpa/inet.h>              // for network unmarshalling stuff
 
@@ -30,31 +31,36 @@ namespace XrdCl
   //----------------------------------------------------------------------------
   bool InQueue::DiscardMessage(Message* msg, uint16_t& sid) const
   {
-    if( msg->GetSize() < 8 )
+    XRootDTransport::ServerResponseInfo sri;
+    Status st = XRootDTransport::GetServerResponseInfo( msg->GetBuffer(), msg->GetSize(), false, sri );
+    if (!st.IsOK())
       return true;
 
-    ServerResponse *rsp = (ServerResponse *)msg->GetBuffer();
-
-    // We got an async message
-    if( rsp->hdr.status == kXR_attn )
+    if( sri.estatus == kXR_attn )
     {
-      if( msg->GetSize() < 12 )
-	return true;
+      if( sri.idavail < 4 )
+        return true;
 
+      //------------------------------------------------------------------------
       // We only care about async responses
-      if( rsp->body.attn.actnum != (int32_t)htonl(kXR_asynresp) )
-	return true;
+      //------------------------------------------------------------------------
+      ServerResponseBody_Attn *ra = (ServerResponseBody_Attn*)sri.idata;
+      if( ra->actnum != (int32_t)htonl(kXR_asynresp) )
+        return true;
 
-      if( msg->GetSize() < 24 )
-	return true;
+      if( sri.idavail < 16 )
+        return true;
 
-      ServerResponse *embRsp = (ServerResponse*)msg->GetBuffer(16);
-      sid = ((uint16_t)embRsp->hdr.streamid[1] << 8) | (uint16_t)embRsp->hdr.streamid[0];
+      //------------------------------------------------------------------------
+      // Get the information about the embedded response
+      //------------------------------------------------------------------------
+
+      st = XRootDTransport::GetServerResponseInfo( sri.idata+8, sri.idavail-8, true, sri );
+      if (!st.IsOK())
+        return true;
     }
-    else
-    {
-      sid = ((uint16_t)rsp->hdr.streamid[1] << 8) | (uint16_t)rsp->hdr.streamid[0];
-    }
+
+    sid = ((uint16_t)sri.sid[1] << 8) | (uint16_t)sri.sid[0];
 
     return false;
   }
