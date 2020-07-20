@@ -176,6 +176,9 @@ int XrdOssIntegrityFile::Close(long long *retsz)
       return -EBADF;
    }
 
+   // wait for any ongoing aios to finish
+   aioWait();
+
    const int cpret = pageMapClose(tpath_);
 
    pages_.reset();

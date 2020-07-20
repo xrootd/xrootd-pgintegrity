@@ -48,10 +48,10 @@ public:
 
    void Init(XrdOssIntegrityFile *fp, XrdOssIntegrityFileAio *nio, XrdSfsAio *aiop, bool isPg, bool read)
    {
-      fp_ =fp;
-      nio_ =nio;
+      fp_   = fp;
+      nio_  = nio;
       aiop_ = aiop;
-      pg_ = isPg;
+      pg_   = isPg;
       read_ = read;
    }
 
@@ -82,11 +82,11 @@ public:
 
    virtual void doneRead() override
    {
-      successor_->Result = this->Result;
-      if (successor_->Result<0 || this->sfsAio.aio_nbytes==0)
+      parentaio_->Result = this->Result;
+      if (parentaio_->Result<0 || this->sfsAio.aio_nbytes==0)
       {
-         rg_.ReleaseAll();
-         successor_->doneRead();
+         parentaio_->doneRead();
+         Recycle();
          return;
       }
       //
@@ -115,26 +115,27 @@ public:
          if (rret == 0) break;
          if (rret<0)
          {
-            successor_->Result = rret;
-            rg_.ReleaseAll();
-            successor_->doneRead();
+            parentaio_->Result = rret;
+            parentaio_->doneRead();
+            Recycle();
             return;
          }
          toread -= rret;
          nread += rret;
       }
-      successor_->Result = nread;
+      parentaio_->Result = nread;
       SchedReadJob();
    }
 
    virtual void doneWrite() override
-   { 
-      successor_->Result = this->Result;
-      if (successor_->Result<0)
+   {
+      parentaio_->Result = this->Result;
+      if (parentaio_->Result<0)
       {
          rg_.ReleaseAll();
          file_->resyncSizes();
-         successor_->doneWrite();
+         parentaio_->doneWrite();
+         Recycle();
          return;
       }
       // in case there was a short write during the async write, finish
@@ -147,25 +148,26 @@ public:
          const ssize_t wret = file_->successor_->Write(&p[nwritten], this->sfsAio.aio_offset+nwritten, towrite);
          if (wret<0)
          {
-            successor_->Result = wret;
+            parentaio_->Result = wret;
             rg_.ReleaseAll();
             file_->resyncSizes();
-            successor_->doneWrite();
+            parentaio_->doneWrite();
+            Recycle();
             return;
          }
          towrite -= wret;
          nwritten += wret;
       }
-      successor_->Result = nwritten;
-      rg_.ReleaseAll();
-      successor_->doneWrite();
+      parentaio_->Result = nwritten;
+      parentaio_->doneWrite();
+      Recycle();
    }
 
    virtual void Recycle()
    {
       rg_.ReleaseAll();
-      successor_->Recycle();
-      successor_ = nullptr;
+      parentaio_ = nullptr;
+      XrdOssIntegrityFile *f = file_;
       file_ = nullptr;
       if (store_)
       {
@@ -177,23 +179,28 @@ public:
       {
          delete this;
       }
+      if (f)
+      {
+         f->aioDec();
+      }
    }
   
-   void Init(XrdSfsAio *successor, XrdOssIntegrityFile *file, bool isPgOp, uint64_t opts, bool isread)
+   void Init(XrdSfsAio *aiop, XrdOssIntegrityFile *file, bool isPgOp, uint64_t opts, bool isread)
    {
-      successor_ = successor;
-      this->sfsAio.aio_fildes = successor->sfsAio.aio_fildes;
-      this->sfsAio.aio_buf = successor->sfsAio.aio_buf;
-      this->sfsAio.aio_nbytes = successor->sfsAio.aio_nbytes;
-      this->sfsAio.aio_offset = successor->sfsAio.aio_offset;
-      this->sfsAio.aio_reqprio = successor->sfsAio.aio_reqprio;
-      this->cksVec = successor->cksVec;
-      this->TIdent = successor->TIdent;
-      file_ = file;
-      isPgOp_ = isPgOp;
-      pgOpts_ = opts;
-      Sched_ = XrdOssIntegrity::Sched_;
-      job_.Init(file, this, successor, isPgOp, isread);
+      parentaio_               = aiop;
+      this->sfsAio.aio_fildes  = aiop->sfsAio.aio_fildes;
+      this->sfsAio.aio_buf     = aiop->sfsAio.aio_buf;
+      this->sfsAio.aio_nbytes  = aiop->sfsAio.aio_nbytes;
+      this->sfsAio.aio_offset  = aiop->sfsAio.aio_offset;
+      this->sfsAio.aio_reqprio = aiop->sfsAio.aio_reqprio;
+      this->cksVec             = aiop->cksVec;
+      this->TIdent             = aiop->TIdent;
+      file_                    = file;
+      isPgOp_                  = isPgOp;
+      pgOpts_                  = opts;
+      Sched_                   = XrdOssIntegrity::Sched_;
+      job_.Init(file, this, aiop, isPgOp, isread);
+      file_->aioInc();
    }
 
    static XrdOssIntegrityFileAio *Alloc(XrdOssIntegrityFileAioStore *store)
@@ -224,7 +231,7 @@ public:
 
 private:
    XrdOssIntegrityFileAioStore *store_;
-   XrdSfsAio *successor_;
+   XrdSfsAio *parentaio_;
    XrdOssIntegrityFile *file_;
    bool isPgOp_;
    XrdOssIntegrityFileAioJob job_;
@@ -262,8 +269,8 @@ void XrdOssIntegrityFileAioJob::DoItRead()
    {
       aiop_->Result = -EIO;
    }
-   nio_->rg_.ReleaseAll();
    aiop_->doneRead();
+   nio_->Recycle();
 }
 
 void XrdOssIntegrityFileAioJob::DoItWrite()

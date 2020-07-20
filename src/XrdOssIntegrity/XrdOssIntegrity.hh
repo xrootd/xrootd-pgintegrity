@@ -99,8 +99,28 @@ virtual int     pgRead (XrdSfsAio*, uint64_t) override;
 virtual ssize_t pgWrite(void*, off_t, size_t, uint32_t*, uint64_t) override;
 virtual int     pgWrite(XrdSfsAio*, uint64_t) override;
 
-                XrdOssIntegrityFile(XrdOss *parent, const char *tid, std::shared_ptr<XrdOssIntegrityConfig> cf) : XrdOssDFHandler(parent->newFile(tid)), parentOss_(parent), tident_(tid), config_(cf), rdonly_(false) { }
+                XrdOssIntegrityFile(XrdOss *parent, const char *tid, std::shared_ptr<XrdOssIntegrityConfig> cf) :
+                    XrdOssDFHandler(parent->newFile(tid)), parentOss_(parent), tident_(tid), config_(cf),
+                    rdonly_(false), aioCntCond_(0), aioCnt_(0), aioCntWaiters_(0) { }
 virtual        ~XrdOssIntegrityFile();
+
+        void    aioInc() { XrdSysCondVarHelper lck(&aioCntCond_); ++aioCnt_; }
+        void    aioDec()
+        {
+           XrdSysCondVarHelper lck(&aioCntCond_);
+           if (--aioCnt_ == 0 && aioCntWaiters_>0)
+              aioCntCond_.Broadcast();
+        }
+        void    aioWait()
+        {
+           XrdSysCondVarHelper lck(&aioCntCond_);
+           ++aioCntWaiters_;
+           while(aioCnt_>0)
+           {
+              aioCntCond_.Wait();
+           }
+           --aioCntWaiters_;
+        }
 
 struct puMapItem_t {
    XrdSysCondVar cond;
@@ -127,6 +147,10 @@ int resyncSizes();
 int pageMapClose(const std::string &);
 int pageMapOpen(const std::string &, int, XrdOucEnv &, std::shared_ptr<XrdOssIntegrityPages> &);
 int createPageUpdater(const std::string &, int, XrdOucEnv &, std::shared_ptr<XrdOssIntegrityPages> &);
+
+XrdSysCondVar aioCntCond_;
+int           aioCnt_;
+int           aioCntWaiters_;
 };
 
 class XrdOssIntegrity : public XrdOssHandler
