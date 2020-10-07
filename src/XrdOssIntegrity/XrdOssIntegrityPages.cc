@@ -223,7 +223,7 @@ ssize_t XrdOssIntegrityPages::apply_sequential_aligned_modify(
 
 ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *const csvec, const uint64_t opts)
 {
-   if (csvec == nullptr && !(opts & XrdOssDF::Verify))
+   if (csvec == NULL && !(opts & XrdOssDF::Verify))
    {
       // if the crc values are not wanted nor checks against data, then
       // there's nothing more to do here
@@ -239,7 +239,7 @@ ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const of
 
    uint32_t *rdbuf;
    size_t rdbufsz;
-   if (csvec == nullptr)
+   if (csvec == NULL)
    {
       // use fixed sized stack buffer
       rdbuf = rdvec;
@@ -292,7 +292,7 @@ ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const of
 
 ssize_t XrdOssIntegrityPages::VerifyRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
-   return FetchRangeAligned(buff,offset,blen,sizes,nullptr,XrdOssDF::Verify);
+   return FetchRangeAligned(buff,offset,blen,sizes,NULL,XrdOssDF::Verify);
 }
 
 int XrdOssIntegrityPages::StoreRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *csvec)
@@ -305,7 +305,7 @@ int XrdOssIntegrityPages::StoreRangeAligned(const void *const buff, const off_t 
 
    if (offset > trackinglen)
    {
-      const int ret = UpdateRangeHoleUntilPage(nullptr, p1, sizes);
+      const int ret = UpdateRangeHoleUntilPage(NULL, p1, sizes);
       if (ret<0) return ret;
    }
 
@@ -317,7 +317,7 @@ int XrdOssIntegrityPages::StoreRangeAligned(const void *const buff, const off_t 
 
 int XrdOssIntegrityPages::UpdateRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
-   return StoreRangeAligned(buff, offset, blen, sizes, nullptr);
+   return StoreRangeAligned(buff, offset, blen, sizes, NULL);
 }
 
 //

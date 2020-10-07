@@ -45,32 +45,32 @@ public:
    XrdOssIntegrityTagstoreFile(std::unique_ptr<XrdOssDF> fd) : fd_(std::move(fd)), trackinglen_(0), isOpen(false) { }
    virtual ~XrdOssIntegrityTagstoreFile() { if (isOpen) { (void)Close(); } }
 
-   virtual int Open(const char *, off_t, int, XrdOucEnv &) override;
-   virtual int Close() override;
+   virtual int Open(const char *, off_t, int, XrdOucEnv &) /* override */;
+   virtual int Close() /* override */;
 
-   virtual void Flush() override;
-   virtual int Fsync() override;
+   virtual void Flush() /* override */;
+   virtual int Fsync() /* override */;
 
-   virtual ssize_t WriteTags(const uint32_t *, off_t, size_t) override;
-   virtual ssize_t ReadTags(uint32_t *, off_t, size_t) override;
+   virtual ssize_t WriteTags(const uint32_t *, off_t, size_t) /* override */;
+   virtual ssize_t ReadTags(uint32_t *, off_t, size_t) /* override */;
 
-   virtual int Truncate(off_t, bool) override;
+   virtual int Truncate(off_t, bool) /* override */;
 
-   virtual off_t GetTrackedTagSize() const override
+   virtual off_t GetTrackedTagSize() const /* override */
    {
       if (!isOpen) return 0;
       return trackinglen_;
    }
 
-   virtual off_t GetTrackedDataSize() const override
+   virtual off_t GetTrackedDataSize() const /* override */
    {
       if (!isOpen) return 0;
       return actualsize_;
    }
 
-   virtual int ResetSizes(const off_t size) override;
+   virtual int ResetSizes(const off_t size) /* override */;
 
-   virtual int SetTrackedSize(const off_t size) override
+   virtual int SetTrackedSize(const off_t size) /* override */
    {
       if (!isOpen) return -EBADF;
       if (size > actualsize_)

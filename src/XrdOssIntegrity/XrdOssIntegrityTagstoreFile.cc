@@ -48,7 +48,7 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    {
       guard_s(XrdOssDF *fd, bool &isopen) : fd_(fd), isopen_(isopen) { }
       ~guard_s() { if (fd_) { fd_->Close(); isopen_ = false; } }
-      void disarm() { fd_ = nullptr; }
+      void disarm() { fd_ = NULL; }
 
       XrdOssDF *fd_;
       bool &isopen_;

@@ -50,7 +50,7 @@ int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t unt
    // if last tracked page is before page "until" extend it
    if (tracked_off>0)
    {
-      if (fd == nullptr) return -EIO;
+      if (fd == NULL) return -EIO;
       uint8_t b[XrdSys::PageSize];
       ssize_t rret = XrdOssIntegrityPages::maxread(fd, b, tracked_page*XrdSys::PageSize, XrdSys::PageSize);
       if (rret < 0) return rret;
@@ -108,7 +108,7 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
    uint32_t prepageval;
 
    // deal with partial first page
-   if (p1_off>0 || blen<XrdSys::PageSize)
+   if ( p1_off>0 || blen < static_cast<size_t>(XrdSys::PageSize) )
    {
       const size_t bavail = (XrdSys::PageSize-p1_off > blen) ? blen : (XrdSys::PageSize-p1_off);
       uint8_t b[XrdSys::PageSize];
@@ -189,7 +189,7 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
    if (p2_off == 0 || (offset + blen >= static_cast<size_t>(trackinglen)))
    {
       // write prepage, calc and write full pages and last partial page
-      const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, nullptr, hasprepage, false, prepageval, 0U);
+      const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, NULL, hasprepage, false, prepageval, 0U);
       if (aret<0) return aret;
       return 0;
    }
@@ -214,7 +214,7 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
    const uint32_t lastpageval = XrdOucCRC::Calc32C(b, std::max(p2_off,toread), 0U);
 
    // write prepage, calculate and write full pages, and write precomputed last page
-   const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, nullptr, hasprepage, true, prepageval, lastpageval);
+   const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, NULL, hasprepage, true, prepageval, lastpageval);
    if (aret<0) return aret;
 
    return 0;
@@ -240,7 +240,7 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
    ntagstoread -= tcnt;
 
    // deal with partial first page
-   if (p1_off>0 || blen<XrdSys::PageSize)
+   if ( p1_off>0 || blen < static_cast<size_t>(XrdSys::PageSize) )
    {
       const size_t bavail = std::min(trackinglen - (XrdSys::PageSize*p1), (off_t)XrdSys::PageSize);
       uint8_t b[XrdSys::PageSize];

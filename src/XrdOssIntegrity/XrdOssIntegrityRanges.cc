@@ -44,25 +44,25 @@ void XrdOssIntegrityRangeGuard::ReleaseAll()
    if (r_)
    {
       r_->RemoveRange(rp_);
-      r_ = nullptr;
-      rp_ = nullptr;
+      r_ = NULL;
+      rp_ = NULL;
    }
 }
 
 void XrdOssIntegrityRangeGuard::Wait()
 {
-   assert(r_ != nullptr);
+   assert(r_ != NULL);
    r_->Wait(rp_);
 }
 
 void XrdOssIntegrityRangeGuard::unlockTrackinglen()
 {
-   assert(pages_ != nullptr);
+   assert(pages_ != NULL);
    assert(trackinglenlocked_ == true);
 
    pages_->TrackedSizeRelease();
    trackinglenlocked_ = false;
-   pages_ = nullptr;
+   pages_ = NULL;
 }
 
 XrdOssIntegrityRangeGuard::~XrdOssIntegrityRangeGuard()

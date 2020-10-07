@@ -193,13 +193,13 @@ XrdOss *XrdOssAddStorageSystem2(XrdOss       *curr_oss,
    std::shared_ptr<XrdOssIntegrityConfig> cf(new XrdOssIntegrityConfig(Logger));
    if (cf->Init(Logger, config_fn, parms, envP) != XrdOssOK)
    {
-      return nullptr;
+      return NULL;
    }
    XrdOssIntegrity *myOss = new XrdOssIntegrity(curr_oss, cf);
    if (myOss->Init(Logger, config_fn, envP) != XrdOssOK)
    {
       delete myOss;
-      return nullptr;
+      return NULL;
    }
    return (XrdOss*)myOss;
 }

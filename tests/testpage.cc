@@ -55,25 +55,25 @@ protected:
     m_fdnull = open("/dev/null", O_WRONLY);
     ASSERT_TRUE(m_fdnull >= 0);
 
-    const char *config_fn = nullptr;
+    const char *config_fn = NULL;
     XrdSysLogger logger(m_fdnull,0);
 
     XrdVERSIONINFODEF(v, "testint", XrdVNUMBER,XrdVERSION);
     XrdOss *ossP = XrdOssDefaultSS(&logger, config_fn, v);
 
     m_libp = dlopen("libXrdOssIntegrity-5.so",RTLD_NOW|RTLD_GLOBAL);
-    ASSERT_TRUE( m_libp != nullptr );
+    ASSERT_TRUE( m_libp != NULL );
 
-    XrdOssAddStorageSystem2_t oss2P=nullptr;
+    XrdOssAddStorageSystem2_t oss2P=NULL;
     oss2P = reinterpret_cast<XrdOssAddStorageSystem2_t>(dlsym(m_libp, "XrdOssAddStorageSystem2"));
 
-    ASSERT_TRUE( oss2P != nullptr );
+    ASSERT_TRUE( oss2P != NULL );
 
     m_oss = oss2P(ossP, &logger, config_fn, "", &m_env);
-    ASSERT_TRUE(m_oss != nullptr );
+    ASSERT_TRUE(m_oss != NULL );
 
     m_file = m_oss->newFile("mytesttid");
-    ASSERT_TRUE(m_file != nullptr);
+    ASSERT_TRUE(m_file != NULL);
     m_fileopen = false;
 
     uint32_t x,m;
@@ -92,10 +92,10 @@ protected:
     delete m_file;
     m_oss->Unlink(TMPFN);
     delete m_oss;
-    m_file = nullptr;
-    m_oss = nullptr;
+    m_file = NULL;
+    m_oss = NULL;
     dlclose(m_libp);
-    m_libp = nullptr;
+    m_libp = NULL;
     close(m_fdnull);
     m_fdnull = -1;
   }
@@ -340,7 +340,7 @@ TEST_F(ossintegrity_pageTest,badcrc) {
   ASSERT_TRUE(memcmp(csvec, csvec2, 4*4) == 0);
   ret = m_file->pgRead(rbuf, 0,	16384, csvec2, XrdOssDF::Verify);
   ASSERT_TRUE(ret == -EDOM);
-  ret = m_file->pgWrite(&m_b[4096], 4096, 4096, nullptr, 0);
+  ret = m_file->pgWrite(&m_b[4096], 4096, 4096, NULL, 0);
   ASSERT_TRUE(ret == 4096);
   ret = m_file->pgRead(rbuf, 4096, 4096, csvec2, XrdOssDF::Verify);
   ASSERT_TRUE(ret == 4096);

@@ -55,7 +55,7 @@ public:
       read_ = read;
    }
 
-   void DoIt() override
+   void DoIt() /* override */
    {
       if (read_) { DoItRead(); }
       else { DoItWrite(); }
@@ -74,13 +74,13 @@ private:
 
 class XrdOssIntegrityFileAio : public XrdSfsAio
 {
-friend XrdOssIntegrityFileAioStore;
+friend class XrdOssIntegrityFileAioStore;
 public:
 
    XrdOssIntegrityRangeGuard rg_;
    uint64_t pgOpts_;
 
-   virtual void doneRead() override
+   virtual void doneRead() /* override */
    {
       parentaio_->Result = this->Result;
       if (parentaio_->Result<0 || this->sfsAio.aio_nbytes==0)
@@ -127,7 +127,7 @@ public:
       SchedReadJob();
    }
 
-   virtual void doneWrite() override
+   virtual void doneWrite() /* override */
    {
       parentaio_->Result = this->Result;
       if (parentaio_->Result<0)
@@ -166,9 +166,9 @@ public:
    virtual void Recycle()
    {
       rg_.ReleaseAll();
-      parentaio_ = nullptr;
+      parentaio_ = NULL;
       XrdOssIntegrityFile *f = file_;
-      file_ = nullptr;
+      file_ = NULL;
       if (store_)
       {
          std::lock_guard<std::mutex> guard(store_->mtx_);
@@ -205,7 +205,7 @@ public:
 
    static XrdOssIntegrityFileAio *Alloc(XrdOssIntegrityFileAioStore *store)
    {
-      XrdOssIntegrityFileAio *p=nullptr;
+      XrdOssIntegrityFileAio *p=NULL;
       if (store)
       {
          std::lock_guard<std::mutex> guard(store->mtx_);
