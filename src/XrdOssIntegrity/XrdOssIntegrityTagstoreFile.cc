@@ -86,7 +86,7 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    if (!mok)
    {
       fileIsBige_ = machineIsBige_;
-      hflags_ = XrdOssIntegrityTagstore::csVer;
+      hflags_ = (dsize==0) ? XrdOssIntegrityTagstore::csVer : 0;
       trackinglen_ = 0;
       const int stret = MarshallAndWriteHeader();
       if (stret<0) return stret;
