@@ -65,19 +65,18 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    }
 
    uint32_t magic;
-   const uint32_t cmagic = 0x54445258U;
 
-   const int mread = XrdOssIntegrityTagstoreFile::fullread(*fd_, header_, 0, 16);
+   const int mread = XrdOssIntegrityTagstoreFile::fullread(*fd_, header_, 0, 20);
    bool mok = false;
    if (mread >= 0)
    {
       memcpy(&magic, header_, 4);
-      if (magic == cmagic)
+      if (magic == cmagic_)
       {
          fileIsBige_ = machineIsBige_;
          mok = true;
       }
-      else if (magic == bswap_32(cmagic))
+      else if (magic == bswap_32(cmagic_))
       {
          fileIsBige_ = !machineIsBige_;
          mok = true;
@@ -87,27 +86,26 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
    if (!mok)
    {
       fileIsBige_ = machineIsBige_;
-      memcpy(header_,&cmagic,4);
-      const ssize_t wret = XrdOssIntegrityTagstoreFile::fullwrite(*fd_,header_,0,4);
-      if (wret<0) return wret;
-      const int stret = WriteTrackedTagSize(0);
+      hflags_ = XrdOssIntegrityTagstore::csVer;
+      trackinglen_ = 0;
+      const int stret = MarshallAndWriteHeader();
       if (stret<0) return stret;
    }
    else
    {
-      uint64_t pb;
-      memcpy(&pb, &header_[4], 8);
-      if (fileIsBige_ == machineIsBige_)
+      memcpy(&trackinglen_, &header_[4], 8);
+      if (fileIsBige_ != machineIsBige_)
       {
-         trackinglen_ = pb;
+         trackinglen_ = bswap_64(trackinglen_);
       }
-      else
+      memcpy(&hflags_,&header_[12], 4);
+      if (fileIsBige_ != machineIsBige_)
       {
-         trackinglen_ = bswap_64(pb);
+         hflags_ = bswap_32(hflags_);
       }
-      const uint32_t cv = XrdOucCRC::Calc32C(header_, 12, 0U);
+      const uint32_t cv = XrdOucCRC::Calc32C(header_, 16, 0U);
       uint32_t rv;
-      memcpy(&rv, &header_[12], 4);
+      memcpy(&rv, &header_[16], 4);
       if (fileIsBige_ != machineIsBige_) rv = bswap_32(rv);
       if (rv != cv)
       {
@@ -129,7 +127,7 @@ int XrdOssIntegrityTagstoreFile::ResetSizes(const off_t size)
    struct stat sb;
    const int ssret = fd_->Fstat(&sb);
    if (ssret<0) return ssret;
-   const off_t expected_tagfile_size = 16LL + 4*((trackinglen_+XrdSys::PageSize-1)/XrdSys::PageSize);
+   const off_t expected_tagfile_size = 20LL + 4*((trackinglen_+XrdSys::PageSize-1)/XrdSys::PageSize);
    // truncate can be relatively slow
    if (expected_tagfile_size < sb.st_size)
    {
@@ -138,10 +136,11 @@ int XrdOssIntegrityTagstoreFile::ResetSizes(const off_t size)
    }
    else if (expected_tagfile_size > sb.st_size)
    {
-      off_t nb = ((sb.st_size - 16)/4);
+      off_t nb = 0;
+      if (sb.st_size>20) nb = (sb.st_size - 20)/4;
       const int stret = WriteTrackedTagSize(nb*XrdSys::PageSize);
       if (stret<0) return stret;
-      const int tret = fd_->Ftruncate(16LL + 4*nb);
+      const int tret = fd_->Ftruncate(20LL + 4*nb);
       if (tret<0) return tret;
    }
    return 0;
@@ -171,7 +170,7 @@ ssize_t XrdOssIntegrityTagstoreFile::WriteTags(const uint32_t *const buf, const 
    if (!isOpen) return -EBADF;
    if (machineIsBige_ != fileIsBige_) return WriteTags_swap(buf, off, n);
 
-   const ssize_t nwritten = XrdOssIntegrityTagstoreFile::fullwrite(*fd_, buf, 16LL+4*off, 4*n);
+   const ssize_t nwritten = XrdOssIntegrityTagstoreFile::fullwrite(*fd_, buf, 20LL+4*off, 4*n);
    if (nwritten<0) return nwritten;
    return nwritten/4;
 }
@@ -181,7 +180,7 @@ ssize_t XrdOssIntegrityTagstoreFile::ReadTags(uint32_t *const buf, const off_t o
    if (!isOpen) return -EBADF;
    if (machineIsBige_ != fileIsBige_) return ReadTags_swap(buf, off, n);
 
-   const ssize_t nread = XrdOssIntegrityTagstoreFile::fullread(*fd_, buf, 16LL+4*off, 4*n);
+   const ssize_t nread = XrdOssIntegrityTagstoreFile::fullread(*fd_, buf, 20LL+4*off, 4*n);
    if (nread<0) return nread;
    return nread/4;
 }
@@ -195,7 +194,7 @@ int XrdOssIntegrityTagstoreFile::Truncate(const off_t size, bool datatoo)
    int wtt = WriteTrackedTagSize(size);
    if (wtt<0) return wtt;
    if (datatoo) actualsize_ = size;
-   const off_t expected_tagfile_size = 16LL + 4*((size+XrdSys::PageSize-1)/XrdSys::PageSize);
+   const off_t expected_tagfile_size = 20LL + 4*((size+XrdSys::PageSize-1)/XrdSys::PageSize);
    return fd_->Ftruncate(expected_tagfile_size);
 }
 
@@ -212,7 +211,7 @@ ssize_t XrdOssIntegrityTagstoreFile::WriteTags_swap(const uint32_t *const buf, c
       {
          b[i] = bswap_32(buf[i+nwritten]);
       }
-      const ssize_t wret = XrdOssIntegrityTagstoreFile::fullwrite(*fd_, b, 16LL+4*(nwritten+off), 4*bs);
+      const ssize_t wret = XrdOssIntegrityTagstoreFile::fullwrite(*fd_, b, 20LL+4*(nwritten+off), 4*bs);
       if (wret<0) return wret;
       towrite -= wret/4;
       nwritten += wret/4;
@@ -229,7 +228,7 @@ ssize_t XrdOssIntegrityTagstoreFile::ReadTags_swap(uint32_t *const buf, const of
    while(toread>0)
    {
       const size_t bs = std::min(toread, bsz);
-      const ssize_t rret = XrdOssIntegrityTagstoreFile::fullread(*fd_, b, 16LL+4*(nread+off), 4*bs);
+      const ssize_t rret = XrdOssIntegrityTagstoreFile::fullread(*fd_, b, 20LL+4*(nread+off), 4*bs);
       if (rret<0) return rret;
       for(size_t i=0;i<bs;i++)
       {

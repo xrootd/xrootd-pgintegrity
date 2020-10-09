@@ -44,7 +44,7 @@
 #include <fcntl.h>
 #include <cstdint>
 
-#define TMPFN "/tmp/xrdossintegrity_testfile"
+#define TMPFN "/tmp/xrdossintegrity_testfile_page"
 
 namespace integrationTests {
 
@@ -431,6 +431,18 @@ TEST_F(ossintegrity_pageTest,pgwriteverifyabort) {
   memset(buf,0,12288);
   ret = m_file->pgWrite(buf, 0, 12288, csvec, XrdOssDF::Verify);
   ASSERT_TRUE(ret == 12288);
+}
+
+TEST_F(ossintegrity_pageTest,writeoverlap) {
+  uint32_t csvec[4]={0},csvec2[4];
+  ssize_t ret = m_file->pgWrite(m_b, 0, 16384, csvec, XrdOssDF::doCalc);
+  ASSERT_TRUE(ret == 16384);
+  ret = m_file->Write(&m_b[4096], 4096, 5000);
+  ASSERT_TRUE(ret == 5000);
+  uint8_t rbuf[16384];
+  ret = m_file->pgRead(rbuf, 0, 16384, csvec2, 0);
+  ASSERT_TRUE(memcmp(rbuf, m_b, 16384)==0);
+  ASSERT_TRUE(memcmp(csvec, csvec2, 4*4)==0);
 }
 
 } // namespace integrationTests

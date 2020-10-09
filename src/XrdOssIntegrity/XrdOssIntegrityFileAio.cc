@@ -94,7 +94,9 @@ int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
 {
    if (!pages_) return -EBADF;
    if (rdonly_) return -EBADF;
+   uint64_t pgopts = opts;
 
+   // do verify	before taking locks to allow for fast fail
    if (aioparm->cksVec && (opts & XrdOssDF::Verify))
    {
       uint32_t valcs;
@@ -105,7 +107,7 @@ int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
    }
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
-   nio->Init(aioparm, this, true, opts, false);
+   nio->Init(aioparm, this, true, pgopts, false);
    pages_->LockTrackinglen(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
                                      (off_t)(aioparm->sfsAio.aio_offset+aioparm->sfsAio.aio_nbytes), false);
    return nio->SchedWriteJob();

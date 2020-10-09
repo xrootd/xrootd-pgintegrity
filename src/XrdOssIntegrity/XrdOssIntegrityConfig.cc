@@ -63,10 +63,15 @@ int XrdOssIntegrityConfig::Init(XrdSysLogger *Logger, const char *config_fn, con
       {
          xrdtSpaceName_ = value;
       }
+      else if (item == "nomissing")
+      {
+         allowMissingTags_ = false;
+      }
    }
 
    err.Say("       compute file holes: ", fillFileHole_ ? "yes" : "no");
    err.Say("       space: ", xrdtSpaceName_.c_str());
+   err.Say("       allow files without CRCs: ", allowMissingTags_ ? "yes" : "no");
 
    err.Say("++++++ Integrity adding OSS layer initialization completed.");
 

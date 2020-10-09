@@ -148,7 +148,29 @@ int XrdOssIntegrity::Create(const char *tident, const char *path, mode_t access_
                       XrdOucEnv &env, int Opts)
 {
    if (isTagFile(path)) return -EPERM;
-   return successor_->Create(tident, path, access_mode, env, Opts);
+
+   const int iret = successor_->Create(tident, path, access_mode, env, Opts);
+   if (iret != XrdOssOK) return iret;
+
+   // If this create also truncated we must make sure the tagfile is
+   // truncated now, as subsequently the user may not give O_TRUNC when
+   // opening the file. If it is a new empty file it will be zero length
+   // and we'll try to make the tag file at open, no need to do it here.
+
+   bool isTrunc = ((Opts>>8)&O_TRUNC) ? true : false;
+   if (!isTrunc) return XrdOssOK;
+
+   const int flags = O_RDWR|O_CREAT|O_TRUNC;
+
+   std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile(tident));
+   XrdOucEnv   myEnv;
+   const int oret = fp->Open(path, flags, 0600, myEnv);
+   if (oret == XrdOssOK)
+   {
+      long long retsz=0;
+      fp->Close(&retsz);
+   }
+   return XrdOssOK;
 }
 
 int XrdOssIntegrity::Chmod(const char *path, mode_t mode, XrdOucEnv *envP)
@@ -170,10 +192,33 @@ int XrdOssIntegrity::Stat(const char *path, struct stat *buff, int opts,
    return successor_->Stat(path, buff, opts, EnvP);
 }
 
-int XrdOssIntegrity::StatPF(const char *path, struct stat *buff)
+int XrdOssIntegrity::StatPF(const char *path, struct stat *buff, int opts)
 {
    if (isTagFile(path)) return -ENOENT;
-   return successor_->StatPF(path, buff);
+   if (!(opts & XrdOss::PF_dStat)) return successor_->StatPF(path, buff, opts);
+
+   buff->st_rdev = 0;
+   const int pfret = successor_->StatPF(path, buff, opts);
+   if (pfret != XrdOssOK)
+   {
+      return pfret;
+   }
+
+   std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile("xrdt"));
+   XrdOucEnv   myEnv;
+   const int oret = fp->Open(path, O_RDONLY, 0600, myEnv);
+   if (oret != XrdOssOK)
+   {
+      return oret;
+   }
+   const int vs = fp->VerificationStatus();
+
+   long long retsz=0;
+   fp->Close(&retsz);
+
+   buff->st_rdev &= ~(XrdOss::PF_csVer | XrdOss::PF_csVun);
+   buff->st_rdev |= static_cast<dev_t>(vs);
+   return XrdOssOK;
 }
 
 int XrdOssIntegrity::StatXA(const char *path, char *buff, int &blen,

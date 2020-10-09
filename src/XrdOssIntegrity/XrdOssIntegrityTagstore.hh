@@ -50,10 +50,17 @@ public:
 
    virtual off_t GetTrackedTagSize() const=0;
    virtual off_t GetTrackedDataSize() const=0;
+   virtual bool IsVerified() const=0;
 
    virtual int SetTrackedSize(off_t)=0;
+   virtual int SetUnverified()=0;
    virtual int ResetSizes(off_t)=0;
    virtual int Truncate(off_t,bool)=0;
+
+   // if this flag is set in the header, it indicates the tags
+   // are for verified checksums.
+   // if it is unset it means the tags are unverified
+   static const uint32_t csVer = 0x00000001;
 };
 
 #endif

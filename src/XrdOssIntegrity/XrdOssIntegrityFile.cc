@@ -203,27 +203,11 @@ int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int O
    if (cgSize>0)
    {
       char size_str[32];
-      sprintf(size_str, "%lld", 16+4*((cgSize+XrdSys::PageSize-1)/XrdSys::PageSize));
+      sprintf(size_str, "%lld", 20+4*((cgSize+XrdSys::PageSize-1)/XrdSys::PageSize));
       newEnv.Put("oss.asize",  size_str);
    }
 
-   // tag file always opened O_RDWR as the Tagstore/Pages object associated will be shared
-   // between any File instances which concurrently access the file
-   // (some of which may be RDWR, some RDONLY)
-   int tagFlags = O_RDWR|O_CREAT;
-   if ((Oflag & O_EXCL) || (Oflag & O_TRUNC)) tagFlags |= O_TRUNC;
-
-   const int crOpts = XRDOSS_mkpath;
-   const int ret = parentOss_->Create(tident_, tpath.c_str(), 0600, newEnv, (tagFlags<<8)|crOpts);
-   if (ret != XrdOssOK && ret != -ENOTSUP)
-   {
-      return ret;
-   }
-
-   std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident_));
-   std::unique_ptr<XrdOssIntegrityTagstore> ts(new XrdOssIntegrityTagstoreFile(std::move(integFile)));
-   std::shared_ptr<XrdOssIntegrityPages> pages(new XrdOssIntegrityPages(std::move(ts), config_->fillFileHole()));
-
+   // get information about data file
    struct stat sb;
    const int sstat = successor_->Fstat(&sb);
    if (sstat<0)
@@ -231,7 +215,45 @@ int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int O
       return sstat;
    }
 
-   const int puret = pages->Open(tpath.c_str(), sb.st_size, tagFlags, newEnv);
+   // tag file always opened O_RDWR as the Tagstore/Pages object associated will be shared
+   // between any File instances which concurrently access the file
+   // (some of which may be RDWR, some RDONLY)
+   int tagFlags = O_RDWR;
+
+   // if data file was truncated do same to tag file and let it be recreated for empty data file
+   if ((Oflag & O_TRUNC)) tagFlags |= O_TRUNC;
+
+   // If the datafile is new, should try to create tag file.
+   // If O_CREAT|O_EXCL was given datafile is new, or if datasize is zero also try to create
+   if (((Oflag & O_CREAT) && (Oflag & O_EXCL)) || sb.st_size==0)
+   {
+      tagFlags |= O_CREAT;
+   }
+
+   if ((tagFlags & O_CREAT))
+   {
+      const int crOpts = XRDOSS_mkpath;
+      const int ret = parentOss_->Create(tident_, tpath.c_str(), 0600, newEnv, (tagFlags<<8)|crOpts);
+      if (ret != XrdOssOK && ret != -ENOTSUP && ret != -EROFS)
+      {
+         return ret;
+      }
+   }
+
+   std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident_));
+   std::unique_ptr<XrdOssIntegrityTagstore> ts(new XrdOssIntegrityTagstoreFile(std::move(integFile)));
+   std::shared_ptr<XrdOssIntegrityPages> pages(new XrdOssIntegrityPages(std::move(ts), config_->fillFileHole(), config_->allowMissingTags()));
+
+   int puret = pages->Open(tpath.c_str(), sb.st_size, tagFlags, newEnv);
+   if (puret<0)
+   {
+      if (puret == -EROFS && rdonly_)
+      {
+         // try to open tag file readonly
+         puret = pages->Open(tpath.c_str(), sb.st_size, O_RDONLY, newEnv);
+      }
+   }
+
    if (puret<0)
    {
       return puret;
@@ -296,6 +318,13 @@ int XrdOssIntegrityFile::Open(const char *path, const int Oflag, const mode_t Mo
       return oret;
    }
 
+   if (pages_->IsReadOnly() && !rdonly_)
+   {
+      (void)pageMapClose(tpath_);
+      pages_.reset();
+      successor_->Close();
+      return -EROFS;
+   }
    return XrdOssOK;
 }
 
@@ -482,7 +511,9 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
 {
    if (!pages_) return -EBADF;
    if (rdonly_) return -EBADF;
+   uint64_t pgopts = opts;
 
+   // do verify before taking locks to allow for faster fail
    if (csvec && (opts & XrdOssDF::Verify))
    {
       uint32_t valcs;
@@ -495,7 +526,7 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
    XrdOssIntegrityRangeGuard rg;
    pages_->LockTrackinglen(rg, offset, offset+wrlen, false);
 
-   int puret = pages_->StoreRange(successor_, buffer, offset, wrlen, csvec, rg);
+   int puret = pages_->StoreRange(successor_, buffer, offset, wrlen, csvec, pgopts, rg);
    if (puret<0) {
       rg.ReleaseAll();
       resyncSizes();
@@ -555,9 +586,11 @@ int XrdOssIntegrityFile::Ftruncate(unsigned long long flen)
 int XrdOssIntegrityFile::Fstat(struct stat *buff)
 {
    if (!pages_) return -EBADF;
-   XrdOssIntegrityPages::Sizes_t sizes = pages_->TrackedSizesGet(false);
-   int ret = successor_->Fstat(buff);
-   if (ret<0) return ret;
+   XrdOssIntegrityPages::Sizes_t sizes;
+   const int tsret = pages_->TrackedSizesGet(sizes, false);
+   const int fsret = successor_->Fstat(buff);
+   if (fsret<0) return fsret;
+   if (tsret<0) return 0;
    buff->st_size = std::max(sizes.first, sizes.second);
    return 0;
 }
@@ -577,4 +610,10 @@ void XrdOssIntegrityFile::Flush()
 {
    pages_->Flush();
    successor_->Flush();
+}
+
+int XrdOssIntegrityFile::VerificationStatus() const
+{
+   if (!pages_) return 0;
+   return pages_->VerificationStatus();
 }

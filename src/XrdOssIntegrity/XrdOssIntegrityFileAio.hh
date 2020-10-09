@@ -280,7 +280,7 @@ void XrdOssIntegrityFileAioJob::DoItWrite()
    if (pg_) {
       puret = fp_->pages_->StoreRange(fp_->successor_,
                                       (const void *)aiop_->sfsAio.aio_buf, (off_t)aiop_->sfsAio.aio_offset,
-                                      (size_t)aiop_->sfsAio.aio_nbytes, (uint32_t*)aiop_->cksVec, nio_->rg_);
+                                      (size_t)aiop_->sfsAio.aio_nbytes, (uint32_t*)aiop_->cksVec, nio_->pgOpts_, nio_->rg_);
 
    }
    else

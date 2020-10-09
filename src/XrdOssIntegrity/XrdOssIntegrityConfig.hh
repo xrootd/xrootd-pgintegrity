@@ -40,7 +40,7 @@ class XrdOssIntegrityConfig
 {
 public:
 
-  XrdOssIntegrityConfig(XrdSysLogger *logger) : fillFileHole_(true), xrdtSpaceName_("public"), err_(logger, "XrdOssIntegrity_") { }
+  XrdOssIntegrityConfig(XrdSysLogger *logger) : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true), err_(logger, "XrdOssIntegrity_") { }
   ~XrdOssIntegrityConfig() { }
 
   int Init(XrdSysLogger *, const char *, const char *, XrdOucEnv *);
@@ -49,11 +49,14 @@ public:
 
   std::string xrdtSpaceName() const { return xrdtSpaceName_; }
 
+  bool allowMissingTags() const { return allowMissingTags_; }
+
   XrdSysError &err() { return err_; }
 
 private:
   bool fillFileHole_;
   std::string xrdtSpaceName_;
+  bool allowMissingTags_;
   XrdSysError err_;
 };
 

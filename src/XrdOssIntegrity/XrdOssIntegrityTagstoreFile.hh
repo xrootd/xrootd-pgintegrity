@@ -85,6 +85,24 @@ public:
       return 0;
    }
 
+   virtual bool IsVerified() const /* override */
+   {
+      if (!isOpen) return false;
+     if ((hflags_ & XrdOssIntegrityTagstore::csVer)) return true;
+     return false;
+   }
+
+   virtual int SetUnverified()
+   {
+      if (!isOpen) return -EBADF;
+     if ((hflags_ & XrdOssIntegrityTagstore::csVer))
+     {
+       hflags_ &= ~XrdOssIntegrityTagstore::csVer;
+       return MarshallAndWriteHeader();
+     }
+     return 0;
+   }
+
    static ssize_t fullread(XrdOssDF &fd, void *buff, const off_t off , const size_t sz)
    {
       size_t toread = sz, nread = 0;
@@ -122,7 +140,8 @@ private:
    bool isOpen;
    bool machineIsBige_;
    bool fileIsBige_;
-   uint8_t header_[16];
+   uint8_t header_[20];
+   uint32_t hflags_;
 
    ssize_t WriteTags_swap(const uint32_t *, off_t, size_t);
    ssize_t ReadTags_swap(uint32_t *, off_t, size_t);
@@ -130,17 +149,36 @@ private:
    int WriteTrackedTagSize(const off_t size)
    {
       if (!isOpen) return -EBADF;
-      uint64_t x = size;
+      trackinglen_ = size;
+      return MarshallAndWriteHeader();
+   }
+
+   int MarshallAndWriteHeader()
+   {
+      if (!isOpen) return -EBADF;
+
+      uint32_t y = cmagic_;
+      if (fileIsBige_ != machineIsBige_) y = bswap_32(y);
+      memcpy(header_, &y, 4);
+
+      uint64_t x = trackinglen_;
       if (fileIsBige_ != machineIsBige_) x = bswap_64(x);
       memcpy(&header_[4], &x, 8);
-      uint32_t cv = XrdOucCRC::Calc32C(header_, 12, 0U);
+
+      y = hflags_;
+      if (fileIsBige_ != machineIsBige_) y = bswap_32(y);
+      memcpy(&header_[12], &y, 4);
+
+      uint32_t cv = XrdOucCRC::Calc32C(header_, 16, 0U);
       if (machineIsBige_ != fileIsBige_) cv = bswap_32(cv);
-      memcpy(&header_[12], &cv, 4);
-      ssize_t wret = fullwrite(*fd_, &header_[4], 4, 12);
+      memcpy(&header_[16], &cv, 4);
+
+      ssize_t wret = fullwrite(*fd_, header_, 0, 20);
       if (wret<0) return wret;
-      trackinglen_ = size;
       return 0;
    }
+
+   static const uint32_t cmagic_ = 0x30544452U;
 };
 
 #endif

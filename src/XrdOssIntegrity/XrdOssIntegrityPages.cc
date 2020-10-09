@@ -33,10 +33,69 @@
 #include "XrdOuc/XrdOucCRC.hh"
 #include "XrdSys/XrdSysPageSize.hh"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include <assert.h>
 
-XrdOssIntegrityPages::Sizes_t XrdOssIntegrityPages::TrackedSizesGet(const bool forupdate)
+XrdOssIntegrityPages::XrdOssIntegrityPages(std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh, bool am) :
+        ts_(std::move(ts)),
+        writeHoles_(wh),
+        allowMissingTags_(am),
+        hasMissingTags_(false),
+        rdonly_(false),
+        tscond_(0),
+        tsforupdate_(false)
 {
+   // empty constructor
+}
+
+int XrdOssIntegrityPages::Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP)
+{
+   hasMissingTags_ = false;
+   rdonly_ = false;
+   int ret = ts_->Open(path, dsize, flags, envP);
+   if (ret == -ENOENT)
+   {
+      // no existing tag
+      if (allowMissingTags_)
+      {
+         hasMissingTags_ = true;
+         return 0;
+      }
+      return -EIO;
+   }
+   if (ret<0) return ret;
+   if ((flags & O_ACCMODE) == O_RDONLY) rdonly_ = true;
+   return 0;
+}
+
+int XrdOssIntegrityPages::Close()
+{
+   if (hasMissingTags_)
+   {
+      hasMissingTags_ = false;
+      return 0;
+   }
+   return ts_->Close();
+}
+
+void XrdOssIntegrityPages::Flush()
+{
+   if (!hasMissingTags_) ts_->Flush();
+}
+
+int XrdOssIntegrityPages::Fsync()
+{
+   if (hasMissingTags_) return 0;
+   return ts_->Fsync();
+}
+
+int XrdOssIntegrityPages::TrackedSizesGet(XrdOssIntegrityPages::Sizes_t &rsizes, const bool forupdate)
+{
+   if (hasMissingTags_) return -ENOENT;
+
    XrdSysCondVarHelper lck(&tscond_);
    while (tsforupdate_)
    {
@@ -48,7 +107,8 @@ XrdOssIntegrityPages::Sizes_t XrdOssIntegrityPages::TrackedSizesGet(const bool f
    {
       tsforupdate_ = true;
    }
-   return std::make_pair(tagsize,datasize);
+   rsizes = std::make_pair(tagsize,datasize);
+   return 0;
 }
 
 int XrdOssIntegrityPages::LockSetTrackedSize(const off_t sz)
@@ -59,6 +119,9 @@ int XrdOssIntegrityPages::LockSetTrackedSize(const off_t sz)
 
 int XrdOssIntegrityPages::LockResetSizes(const off_t sz)
 {
+   // nothing to do is no tag file
+   if (hasMissingTags_) return 0;
+
    XrdSysCondVarHelper lck(&tscond_);
    return ts_->ResetSizes(sz);
 }
@@ -67,6 +130,12 @@ int XrdOssIntegrityPages::LockTruncateSize(const off_t sz, const bool datatoo)
 {
    XrdSysCondVarHelper lck(&tscond_);
    return ts_->Truncate(sz,datatoo);
+}
+
+int XrdOssIntegrityPages::LockMakeUnverified()
+{
+   XrdSysCondVarHelper lck(&tscond_);
+   return ts_->SetUnverified();
 }
 
 void XrdOssIntegrityPages::TrackedSizeRelease()
@@ -89,6 +158,16 @@ int XrdOssIntegrityPages::UpdateRange(XrdOssDF *const fd, const void *buff, cons
    {
      return 0;
    }
+
+   // if the tag file is missing we don't need to store anything
+   if (hasMissingTags_)
+   {
+      return 0;
+   }
+
+   // update of file were checksums are based on the file data suppplied: as there's no seprate
+   // source of checksum information mark this file as having unverified checksums
+   LockMakeUnverified();
 
    const Sizes_t sizes = rg.getTrackinglens();
 
@@ -119,6 +198,12 @@ ssize_t XrdOssIntegrityPages::VerifyRange(XrdOssDF *const fd, const void *buff, 
    if (offset<0)
    {
       return -EINVAL;
+   }
+
+   // if the tag file is missing we don't verify anything
+   if (hasMissingTags_)
+   {
+      return blen;
    }
 
    const Sizes_t sizes = rg.getTrackinglens();
@@ -322,20 +407,27 @@ int XrdOssIntegrityPages::UpdateRangeAligned(const void *const buff, const off_t
 
 //
 // LockTrackinglen: obtain current tracking counts and lock the following as necessary:
-//                  tracking counts and file byte range [offset, offend)
+//                  tracking counts and file byte range [offset, offend). Lock will be applied
+//                  at the page level.
 //
-// offset - byte offset to apply lock
-// offend - end of range byte (excluding byte at end)
+// offset - byte offset of first page to apply lock
+// offend - end of range byte (excluding byte at end) of page at which to end lock
 // rdonly - will be a read-only operation
 //
 void XrdOssIntegrityPages::LockTrackinglen(XrdOssIntegrityRangeGuard &rg, const off_t offset, const off_t offend, const bool rdonly)
 {
+   // no need to lock if we don't have a tag file
+   if (hasMissingTags_) return;
+
    // in case of empty range the tracking len is not copied
    if (offset == offend) return;
 
    {
       XrdSysMutexHelper lck(rangeaddmtx_);
-      const Sizes_t sizes = TrackedSizesGet(!rdonly);
+
+      Sizes_t sizes;
+      (void)TrackedSizesGet(sizes, !rdonly);
+
       // tag tracking size: always less than or equal to actual tracked size
       const off_t trackinglen = sizes.first;
 
@@ -367,6 +459,9 @@ void XrdOssIntegrityPages::LockTrackinglen(XrdOssIntegrityRangeGuard &rg, const 
 int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIntegrityRangeGuard &rg)
 {
    if (len<0) return -EINVAL;
+
+   // nothing to truncate if there is no tag file
+   if (hasMissingTags_) return 0;
 
    const Sizes_t sizes = rg.getTrackinglens();
 
@@ -433,6 +528,17 @@ ssize_t XrdOssIntegrityPages::FetchRange(
    // these methods require page aligned offset.
    if ((offset & XrdSys::PageMask)) return -EINVAL;
 
+   // if the tag file is missing there is nothing to fetch or verify
+   // but if we should return a list of checksums calculate them from the data
+   if (hasMissingTags_)
+   {
+      if (csvec)
+      {
+         XrdOucCRC::Calc32C((void *)buff, blen, csvec);
+      }
+      return blen;
+   }
+
    const Sizes_t sizes = rg.getTrackinglens();
    const off_t trackinglen = sizes.first;
 
@@ -460,7 +566,7 @@ ssize_t XrdOssIntegrityPages::FetchRange(
    return FetchRangeAligned(buff,offset,blen,sizes,csvec,opts);
 }
 
-int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, XrdOssIntegrityRangeGuard &rg)
+int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssIntegrityRangeGuard &rg)
 {
    if (offset<0)
    {
@@ -475,6 +581,17 @@ int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const
    // these methods require page aligned offset.
    if ((offset & XrdSys::PageMask)) return -EINVAL;
 
+   // if the tag file is missing there is nothing to store
+   // but do calculate checksums to return, if requested to do so
+   if (hasMissingTags_)
+   {
+      if (csvec && (opts & XrdOssDF::doCalc))
+      {
+         XrdOucCRC::Calc32C((void *)buff, blen, csvec);
+      }
+      return blen;
+   }
+
    const Sizes_t sizes = rg.getTrackinglens();
    const off_t trackinglen = sizes.first;
 
@@ -484,6 +601,18 @@ int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const
    // if the last page is partially filled can not write past it
    if ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen) return -EINVAL;
 
+   // if doCalc is set and we have a csvec buffer fill it with calculated values
+   if (csvec && (opts & XrdOssDF::doCalc))
+   {
+      XrdOucCRC::Calc32C((void *)buff, blen, csvec);
+   }
+
+   // if no vector of crc have been given then mark this file as having unverified checksums
+   if (!csvec || (opts & XrdOssDF::doCalc))
+   {
+      LockMakeUnverified();
+   }
+
    if (offset+blen > static_cast<size_t>(trackinglen))
    {
       LockSetTrackedSize(offset+blen);
@@ -491,4 +620,17 @@ int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const
    }
 
    return StoreRangeAligned(buff,offset,blen,sizes,csvec);
+}
+
+int XrdOssIntegrityPages::VerificationStatus() const
+{
+   if (hasMissingTags_)
+   {
+      return 0;
+   }
+   if (ts_->IsVerified())
+   {
+      return XrdOss::PF_csVer;
+   }
+   return XrdOss::PF_csVun;
 }

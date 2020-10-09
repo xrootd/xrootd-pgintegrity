@@ -44,27 +44,27 @@ class XrdOssIntegrityPages
 public:
    typedef std::pair<off_t,off_t> Sizes_t;
 
-   XrdOssIntegrityPages(std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh) : ts_(std::move(ts)), writeHoles_(wh), tscond_(0), tsforupdate_(false) { }
+   XrdOssIntegrityPages(std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh, bool am);
    ~XrdOssIntegrityPages() { (void)Close(); }
 
-   int Open(const char *path, off_t dsize, int mode, XrdOucEnv &envP) { return ts_->Open(path, dsize, mode, envP); }
-   int Close() { return ts_->Close(); }
+   int Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP);
+   int Close();
 
    int UpdateRange(XrdOssDF *, const void *, off_t, size_t, XrdOssIntegrityRangeGuard&);
    ssize_t VerifyRange(XrdOssDF *, const void *, off_t, size_t, XrdOssIntegrityRangeGuard&);
-   void Flush() { ts_->Flush(); }
-   int Fsync() { return ts_->Fsync(); }
+   void Flush();
+   int Fsync();
 
    ssize_t FetchRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssIntegrityRangeGuard&);
-   int StoreRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, XrdOssIntegrityRangeGuard&);
+   int StoreRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssIntegrityRangeGuard&);
    void LockTrackinglen(XrdOssIntegrityRangeGuard &, off_t, off_t, bool);
 
+   bool IsReadOnly() const { return rdonly_; }
    int truncate(XrdOssDF *, off_t, XrdOssIntegrityRangeGuard&);
-   Sizes_t TrackedSizesGet(bool);
-   int LockSetTrackedSize(off_t);
+   int TrackedSizesGet(Sizes_t &, bool);
    int LockResetSizes(off_t);
-   int LockTruncateSize(off_t,bool);
    void TrackedSizeRelease();
+   int VerificationStatus() const;
 
 protected:
    ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, uint32_t *, bool, bool, uint32_t, uint32_t);
@@ -72,9 +72,16 @@ protected:
    XrdSysMutex rangeaddmtx_;
    XrdOssIntegrityRanges ranges_;
    bool writeHoles_;
+   bool allowMissingTags_;
+   bool hasMissingTags_;
+   bool rdonly_;
 
    XrdSysCondVar tscond_;
    bool tsforupdate_;
+
+   int LockSetTrackedSize(off_t);
+   int LockTruncateSize(off_t,bool);
+   int LockMakeUnverified();
 
    int UpdateRangeAligned(const void *, off_t, size_t, const Sizes_t &);
    int UpdateRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);

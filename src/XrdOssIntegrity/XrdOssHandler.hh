@@ -113,6 +113,7 @@ virtual int       Stats(char *bp, int bl) /* override */ { return successor_->St
                   // Specialized stat type function (none supported by default)
 virtual int       StatFS(const char *path, char *buff, int &blen, XrdOucEnv *eP=0) /* override */ { return successor_->StatFS(path, buff, blen, eP); }
 virtual int       StatLS(XrdOucEnv &env, const char *cgrp, char *buff, int &blen) /* override */ { return successor_->StatLS(env, cgrp, buff, blen); }
+virtual int       StatPF(const char *path, struct stat *buff, int opts) /* override */ { return successor_->StatPF(path, buff, opts); }
 virtual int       StatPF(const char *path, struct stat *buff) /* override */ { return successor_->StatPF(path, buff); }
 virtual int       StatVS(XrdOssVSInfo *sP, const char *sname=0, int updt=0) /* override */ { return successor_->StatVS(sP, sname, updt); }
 virtual int       StatXA(const char *path, char *buff, int &blen, XrdOucEnv *eP=0) /* override */ { return successor_->StatXA(path, buff, blen, eP); }

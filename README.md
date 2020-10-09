@@ -54,6 +54,13 @@ errors. Usually this is not what is wanted, unless it is known that hole pages
 should not be read. Partial write of pages implies a read-modify-write, which
 would also fail.
 
+nomissing
+This option requires the files containing the CRC32C values to exist for previously
+existing datafiles. If they do not an error will be returned when tyring to open the datafile.
+Conversely, the default behaviour if a CRC file does not exist is that CRC values
+will not be written or verfieid as the datafile is accessed. If CRC values are requested
+they will be calculated from the data currently in the datafile.
+
 space=name
 The Oss space name to be used for the files containing the CRC32C values.
 ```
