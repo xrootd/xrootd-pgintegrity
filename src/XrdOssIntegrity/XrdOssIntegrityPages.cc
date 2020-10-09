@@ -596,10 +596,18 @@ int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const
    const off_t trackinglen = sizes.first;
 
    // blen must be multiple of pagesize or short for page at eof
-   if ((blen % XrdSys::PageSize) != 0 && offset+blen < static_cast<size_t>(trackinglen)) return -EINVAL;
+   if ((blen % XrdSys::PageSize) != 0 && offset+blen < static_cast<size_t>(trackinglen))
+   {
+      return -EINVAL;
+   }
 
-   // if the last page is partially filled can not write past it
-   if ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen) return -EINVAL;
+   // pgWrite is documented to fail if one writes at an offset past a previous pgWrite
+   // that filled a partial page at the EOF. We try to match this here (although this
+   // will also apply if a previous Write has left the EOF not page aligned).
+   if ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen)
+   {
+      return -ESPIPE;
+   }
 
    // if doCalc is set and we have a csvec buffer fill it with calculated values
    if (csvec && (opts & XrdOssDF::doCalc))

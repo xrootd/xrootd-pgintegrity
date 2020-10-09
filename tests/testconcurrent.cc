@@ -65,17 +65,19 @@ public:
     }
     
     for(int i=0;i<2000;i++) {
-      off_t off = double(rand())/RAND_MAX * (sizeof(m_b)-1);
-      size_t len = double(rand())/RAND_MAX * sizeof(m_b);
-      len = std::min(len,sizeof(m_b)-off-1);
-      size_t bufidx = double(rand())/RAND_MAX * (sizeof(m_b)-1);
-      bufidx = std::min(bufidx, sizeof(m_b)-len-1);
+      off_t off = double(rand())/RAND_MAX * sizeof(m_b);
+      size_t len = 1 + double(rand())/RAND_MAX * sizeof(m_b);
+      len = std::min(len,sizeof(m_b)-off);
+      size_t bufidx = double(rand())/RAND_MAX * sizeof(m_b);
+      bufidx = std::min(bufidx, sizeof(m_b)-len);
       ssize_t res=0;
       switch(rand() % 4) {
         case 0:
           off &= 0xfffff000;
           len &= 0xfffff000;
           res = file->pgWrite(&m_b[bufidx],off,len,NULL,0);
+          // pgWrite can fail if current EOF if not on page boundary
+          if (res==-ESPIPE) res=0;
           break;
         case 1:
           off &= 0xfffff000;
@@ -174,6 +176,9 @@ protected:
 
 TEST_F(ossintegrity_pageConcurrent,concurrent) {
   ASSERT_TRUE((m_oss->Features() & XRDOSS_HASFSCS) != 0);
+
+  closefile();
+
   std::vector<std::thread> thr;
   std::vector<int> res(NTHR);
   for(int i=0;i<NTHR;i++) {
