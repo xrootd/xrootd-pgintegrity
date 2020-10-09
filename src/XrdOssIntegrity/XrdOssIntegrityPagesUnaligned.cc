@@ -167,9 +167,9 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
    }
 
    // next page (if any)
-   const off_t np = (p1_off != 0) ? p1+1 : p1;
+   const off_t np = hasprepage ? p1+1 : p1;
    // next page starts at buffer offset
-   const size_t npoff = XrdSys::PageSize - p1_off;
+   const size_t npoff = hasprepage ? (XrdSys::PageSize - p1_off) : 0;
 
    // anything in next page?
    if (blen <= npoff)
