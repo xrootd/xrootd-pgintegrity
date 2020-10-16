@@ -242,6 +242,7 @@ private:
 void XrdOssIntegrityFileAioJob::DoItRead()
 {
    // this job runs after async Read
+   // range was already locked read-only before the read
    ssize_t puret;
    if (pg_)
    {
@@ -276,6 +277,10 @@ void XrdOssIntegrityFileAioJob::DoItRead()
 void XrdOssIntegrityFileAioJob::DoItWrite()
 {
    // this job runs before async Write
+
+   // lock range
+   fp_->pages_->LockTrackinglen(nio_->rg_, (off_t)aiop_->sfsAio.aio_offset,
+                                (off_t)(aiop_->sfsAio.aio_offset+aiop_->sfsAio.aio_nbytes), false);
    int puret;
    if (pg_) {
       puret = fp_->pages_->StoreRange(fp_->successor_,

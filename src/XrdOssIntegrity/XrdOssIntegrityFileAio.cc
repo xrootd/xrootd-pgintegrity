@@ -71,8 +71,7 @@ int XrdOssIntegrityFile::Write(XrdSfsAio *aiop)
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aiop, this, false, 0, false);
-   pages_->LockTrackinglen(nio->rg_, (off_t)aiop->sfsAio.aio_offset,
-                                     (off_t)(aiop->sfsAio.aio_offset+aiop->sfsAio.aio_nbytes), false);
+   // pages will be locked when write is scheduled
    return nio->SchedWriteJob();
 }
 
@@ -108,8 +107,7 @@ int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, pgopts, false);
-   pages_->LockTrackinglen(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
-                                     (off_t)(aioparm->sfsAio.aio_offset+aioparm->sfsAio.aio_nbytes), false);
+   // pages will be locked when write is scheduled
    return nio->SchedWriteJob();
 }
 
