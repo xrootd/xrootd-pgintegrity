@@ -124,35 +124,44 @@ virtual        ~XrdOssIntegrityFile();
 
         int VerificationStatus();
 
-struct puMapItem_t {
-   XrdSysCondVar cond;
-   std::shared_ptr<XrdOssIntegrityPages> pages;
-   bool inprogress;
+        int FRename(const char *, XrdOucEnv *old_env=0, XrdOucEnv *new_env=0);
 
-   puMapItem_t() : cond(0), inprogress(false) { }
-   ~puMapItem_t() { }
-};
+        int FUnlink(int, XrdOucEnv *);
 
-static XrdSysMutex pumtx_;
-static std::unordered_map<std::string, std::shared_ptr<puMapItem_t> > pumap_;
+        XrdOssIntegrityPages *Pages() {
+           return pmi_->pages.get();
+        }
+
+        struct puMapItem_t {
+           int busy;                              // access under map's lock
+           XrdSysMutex mtx;
+           std::unique_ptr<XrdOssIntegrityPages> pages;
+           std::string dpath;
+           std::string tpath;
+           bool unlinked;
+
+           puMapItem_t() : busy(0), unlinked(false) { }
+        };
+
+static  XrdSysMutex pumtx_;
+static  std::unordered_map<std::string, std::shared_ptr<puMapItem_t> > pumap_;
 
 private:
-XrdOss *parentOss_;
-const char *tident_;
-std::string tpath_;
-std::shared_ptr<XrdOssIntegrityPages> pages_;
-XrdOssIntegrityFileAioStore aiostore_;
-std::shared_ptr<XrdOssIntegrityConfig> config_;
-bool rdonly_;
+        XrdOss *parentOss_;
+        const char *tident_;
+        std::shared_ptr<puMapItem_t> pmi_;
+        XrdOssIntegrityFileAioStore aiostore_;
+        std::shared_ptr<XrdOssIntegrityConfig> config_;
+        bool rdonly_;
 
-int resyncSizes();
-int pageMapClose(const std::string &);
-int pageMapOpen(const std::string &, int, XrdOucEnv &, std::shared_ptr<XrdOssIntegrityPages> &);
-int createPageUpdater(const std::string &, int, XrdOucEnv &, std::shared_ptr<XrdOssIntegrityPages> &);
+        int resyncSizes();
+        int pageMapClose();
+        int pageAndFileOpen(const char *, const int, const int, const mode_t, XrdOucEnv &);
+        int createPageUpdater(const std::string &, int, XrdOucEnv &, std::unique_ptr<XrdOssIntegrityPages> &);
 
-XrdSysCondVar aioCntCond_;
-int           aioCnt_;
-int           aioCntWaiters_;
+        XrdSysCondVar aioCntCond_;
+        int           aioCnt_;
+        int           aioCntWaiters_;
 };
 
 class XrdOssIntegrity : public XrdOssHandler

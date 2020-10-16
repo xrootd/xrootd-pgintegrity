@@ -75,17 +75,20 @@ int XrdOssIntegrity::Unlink(const char *path, int Opts, XrdOucEnv *eP)
 {
    if (isTagFile(path)) return -ENOENT;
 
-   const int fret = successor_->Unlink(path, Opts, eP);
-
-   if (path)
+   std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile("xrdt"));
+   XrdOucEnv   myEnv;
+   const int oret = fp->Open(path, O_RDWR, 0600, myEnv);
+   if (oret != XrdOssOK)
    {
-      std::string ipath(path);
-      ipath += ".xrdt";
-      int ret = successor_->Unlink(ipath.c_str(), Opts, eP);
-      if (ret<0 && ret != -ENOENT) return ret;
+      return oret;
    }
 
-   return fret;
+   const int ret = fp->FUnlink(Opts, eP);
+
+   long long retsz=0;
+   fp->Close(&retsz);
+
+   return ret;
 }
 
 int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
@@ -93,21 +96,20 @@ int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
 {
    if (isTagFile(oldname) || isTagFile(newname)) return -ENOENT;
 
-   const int sret = successor_->Rename(oldname, newname, old_env, new_env);
-   if (sret<0) return sret;
-
-   if (oldname && newname) {
-      std::string iold(oldname),inew(newname);
-      iold += ".xrdt";
-      inew += ".xrdt";
-      int ret = successor_->Rename(iold.c_str(), inew.c_str(), old_env, new_env);
-      if (ret<0 && ret != -ENOENT)
-      {
-         (void) successor_->Rename(newname, oldname, new_env, old_env);
-         return ret;
-      }
+   std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile("xrdt"));
+   XrdOucEnv   myEnv;
+   const int oret = fp->Open(oldname, O_RDWR, 0600, myEnv);
+   if (oret != XrdOssOK)
+   {
+      return oret;
    }
-   return sret;
+
+   const int rnret = fp->FRename(newname, old_env, new_env);
+
+   long long retsz=0;
+   fp->Close(&retsz);
+
+   return rnret;
 }
 
 int XrdOssIntegrity::Truncate(const char *path, unsigned long long size, XrdOucEnv *envP)
@@ -149,13 +151,18 @@ int XrdOssIntegrity::Create(const char *tident, const char *path, mode_t access_
 {
    if (isTagFile(path)) return -EPERM;
 
-   const int iret = successor_->Create(tident, path, access_mode, env, Opts);
+   // don't let create do any truncating
+   // instead let the open do it: as it is aware of the tag file
+   int dopts = Opts;
+   dopts = (((dopts>>8)&(~O_TRUNC))<<8)|(dopts&0xff);
+
+   const int iret = successor_->Create(tident, path, access_mode, env, dopts);
    if (iret != XrdOssOK) return iret;
 
-   // If this create also truncated we must make sure the tagfile is
-   // truncated now, as subsequently the user may not give O_TRUNC when
-   // opening the file. If it is a new empty file it will be zero length
-   // and we'll try to make the tag file at open, no need to do it here.
+   // If create did want truncate we make sure give open the
+   // chance to truncated now, as subsequently the user may not give O_TRUNC when
+   // opening the file. If it is was a new empty file (without truncate) it will
+   // be zero length and we'll try to make the tag file at open, no need to do it here.
 
    bool isTrunc = ((Opts>>8)&O_TRUNC) ? true : false;
    if (!isTrunc) return XrdOssOK;
@@ -164,7 +171,7 @@ int XrdOssIntegrity::Create(const char *tident, const char *path, mode_t access_
 
    std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile(tident));
    XrdOucEnv   myEnv;
-   const int oret = fp->Open(path, flags, 0600, myEnv);
+   const int oret = fp->Open(path, flags, access_mode, myEnv);
    if (oret == XrdOssOK)
    {
       long long retsz=0;

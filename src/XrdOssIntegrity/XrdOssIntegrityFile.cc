@@ -49,121 +49,132 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <assert.h>
 
 // storage for class members
 XrdSysMutex XrdOssIntegrityFile::pumtx_;
 std::unordered_map<std::string, std::shared_ptr<XrdOssIntegrityFile::puMapItem_t> > XrdOssIntegrityFile::pumap_;
 
 //
-// expects the caller still has a shared_ptr to the XrdOssIntegrityPages object.
-// The underlying object will be closed and the mapentry removed if no others hold a copy.
+// If no others hold a pointer to Pages object, close it and remoe the pagemap info object.
 //
-int XrdOssIntegrityFile::pageMapClose(const std::string &tpath)
+int XrdOssIntegrityFile::pageMapClose()
 {
-   std::shared_ptr<puMapItem_t> pmi;
+   if (!pmi_) return -EBADF;
+   bool doclose = false;
+
+   XrdSysMutexHelper lck(pmi_->mtx);
    {
-      XrdSysMutexHelper lck(pumtx_);
-      auto mapidx = pumap_.find(tpath);
-      if (mapidx != pumap_.end())
+      XrdSysMutexHelper lck2(pumtx_);
+      pmi_->busy--;
+      if (pmi_->busy == 0)
       {
-         pmi = mapidx->second;
+         if (!pmi_->unlinked)
+         {
+            auto mapidx = pumap_.find(pmi_->tpath);
+            assert(mapidx != pumap_.end());
+            pumap_.erase(mapidx);
+         }
+         doclose = true;
       }
    }
 
    int cpret = 0;
-   if (pmi)
+   if (doclose)
    {
-      pmi->cond.Lock();
-      while(pmi->inprogress)
+      if (pmi_->pages)
       {
-         pmi->cond.Wait();
+         cpret = pmi_->pages->Close();
+         pmi_->pages.reset();
       }
-
-      if (pmi->pages.use_count() == 2)
-      {
-         cpret = pmi->pages->Close();
-         pmi->pages.reset();
-      }
-
-      if (!pmi->pages)
-      {
-         XrdSysMutexHelper lck(pumtx_);
-         auto mapidx = pumap_.find(tpath);
-         if (mapidx != pumap_.end())
-         {
-            if (pmi.use_count() == 2)
-            {
-               pumap_.erase(mapidx);
-            }
-         }
-      }
-      pmi->cond.UnLock();
    }
+
+   pmi_->mtx.UnLock();
+   pmi_.reset();
+
    return cpret;
 }
 
-int XrdOssIntegrityFile::pageMapOpen(const std::string &tpath, const int Oflag, XrdOucEnv &Env, std::shared_ptr<XrdOssIntegrityPages> &retpages)
+int XrdOssIntegrityFile::pageAndFileOpen(const char *fn, const int dflags, const int Oflag, const mode_t Mode, XrdOucEnv &Env)
 {
-   std::shared_ptr<puMapItem_t> pmi;
+   if (pmi_) return -EBADF;
+
    {
+      std::string tpath = std::string(fn) + ".xrdt";
       XrdSysMutexHelper lck(pumtx_);
       auto mapidx = pumap_.find(tpath);
       if (mapidx == pumap_.end())
       {
-         pmi.reset(new puMapItem_t());
-         pumap_.insert(std::make_pair(tpath, pmi));
+         pmi_.reset(new puMapItem_t());
+         pmi_->dpath = std::string(fn);
+         pmi_->tpath = tpath;
+         pumap_.insert(std::make_pair(tpath, pmi_));
       }
       else
       {
-         pmi = mapidx->second;
+         pmi_ = mapidx->second;
+         assert(!pmi_->unlinked);
       }
+      pmi_->busy++;
    }
 
-   pmi->cond.Lock();
-   while(pmi->inprogress)
+   XrdSysMutexHelper lck(pmi_->mtx);
+   if (pmi_->unlinked)
    {
-      pmi->cond.Wait();
+     pmi_->busy--;
+     // filename replaced since check, try again
+     lck.UnLock();
+     pmi_.reset();
+     return pageAndFileOpen(fn, dflags, Oflag, Mode, Env);
    }
 
-   if (pmi->pages)
+   if ((dflags & O_TRUNC) && pmi_->pages)
    {
-      retpages = pmi->pages;
-      pmi->cond.UnLock();
-      return XrdOssOK;
+      // asked to truncate but the file is already open: becomes difficult to sync.
+      // So, return error
+      return -ETXTBSY;
    }
-     
-   pmi->inprogress = true;
-   pmi->cond.UnLock();
 
-   const int oret = createPageUpdater(tpath, Oflag, Env, retpages);
-
-   pmi->cond.Lock();
-   pmi->inprogress = false;
-   if (oret>=0)
+   const int dataret = successor_->Open(pmi_->dpath.c_str(), dflags, Mode, Env);
+   int pageret = XrdOssOK;
+   if (dataret == XrdOssOK)
    {
-      pmi->pages = retpages;
-   }
-   else
-   {
-      XrdSysMutexHelper lck(pumtx_);
-      auto mapidx = pumap_.find(tpath);
-      if (mapidx != pumap_.end())
+      if (pmi_->pages)
       {
-         if (pmi.use_count() == 2)
-         {
-            pumap_.erase(mapidx);
-         }
+         return XrdOssOK;
+      }
+     
+      pageret = createPageUpdater(pmi_->tpath, Oflag, Env, pmi_->pages);
+      if (pageret == XrdOssOK)
+      {
+         return XrdOssOK;
       }
    }
-   pmi->cond.Broadcast();
-   pmi->cond.UnLock();
 
-   return oret;
+   // failed to open the datafile or create the page object.
+   // close datafile if needed
+   if (dataret == XrdOssOK)
+   {
+      (void) successor_->Close();
+   }
+
+   XrdSysMutexHelper lck2(pumtx_);
+   pmi_->busy--;
+   auto mapidx = pumap_.find(pmi_->tpath);
+   if (pmi_->busy == 0)
+   {
+      assert(mapidx != pumap_.end());
+      pumap_.erase(mapidx);
+   }
+   pmi_->mtx.UnLock();
+   pmi_.reset();
+
+   return (dataret != XrdOssOK) ? dataret : pageret;
 }
 
 XrdOssIntegrityFile::~XrdOssIntegrityFile()
 {
-   if (pages_)
+   if (pmi_)
    {
       (void)Close();
    }
@@ -171,7 +182,7 @@ XrdOssIntegrityFile::~XrdOssIntegrityFile()
 
 int XrdOssIntegrityFile::Close(long long *retsz)
 {
-   if (!pages_)
+   if (!pmi_)
    {
       return -EBADF;
    }
@@ -179,16 +190,14 @@ int XrdOssIntegrityFile::Close(long long *retsz)
    // wait for any ongoing aios to finish
    aioWait();
 
-   const int cpret = pageMapClose(tpath_);
+   const int cpret = pageMapClose();
 
-   pages_.reset();
-   tpath_.clear();
    const int csret = successor_->Close(retsz);
    if (cpret<0) return cpret;
    return csret;
 }
 
-int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int Oflag, XrdOucEnv &Env, std::shared_ptr<XrdOssIntegrityPages> &retpages)
+int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int Oflag, XrdOucEnv &Env, std::unique_ptr<XrdOssIntegrityPages> &retpages)
 {
    XrdOucEnv newEnv;
    newEnv.Put("oss.cgroup", config_->xrdtSpaceName().c_str());
@@ -242,7 +251,7 @@ int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int O
 
    std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident_));
    std::unique_ptr<XrdOssIntegrityTagstore> ts(new XrdOssIntegrityTagstoreFile(std::move(integFile)));
-   std::shared_ptr<XrdOssIntegrityPages> pages(new XrdOssIntegrityPages(std::move(ts), config_->fillFileHole(), config_->allowMissingTags()));
+   std::unique_ptr<XrdOssIntegrityPages> pages(new XrdOssIntegrityPages(std::move(ts), config_->fillFileHole(), config_->allowMissingTags()));
 
    int puret = pages->Open(tpath.c_str(), sb.st_size, tagFlags, newEnv);
    if (puret<0)
@@ -259,7 +268,7 @@ int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int O
       return puret;
    }
 
-   retpages = pages;
+   retpages = std::move(pages);
    return XrdOssOK;
 }
 
@@ -267,7 +276,7 @@ int XrdOssIntegrityFile::Open(const char *path, const int Oflag, const mode_t Mo
 {
    char cxid[4];
 
-   if (pages_)
+   if (pmi_)
    {
       // already open
       return -EINVAL;
@@ -283,8 +292,6 @@ int XrdOssIntegrityFile::Open(const char *path, const int Oflag, const mode_t Mo
       return -ENOENT;
    }
 
-   tpath_ = std::string(path) + ".xrdt";
-
    int dflags = Oflag;
    if ((dflags & O_ACCMODE) == O_WRONLY)
    {
@@ -299,30 +306,21 @@ int XrdOssIntegrityFile::Open(const char *path, const int Oflag, const mode_t Mo
       rdonly_ = false;
    }
 
-   const int dataret = successor_->Open(path, dflags, Mode, Env);
-   if (dataret != XrdOssOK)
+   const int oret = pageAndFileOpen(path, dflags, Oflag, Mode, Env);
+   if (oret<0)
    {
-      return dataret;
+      return oret;
    }
 
    if (successor_->isCompressed(cxid)>0)
    {
-      successor_->Close();
+      (void)Close();
       return -ENOTSUP;
    }
 
-   const int oret = pageMapOpen(tpath_, Oflag, Env, pages_);
-   if (oret<0)
+   if (Pages()->IsReadOnly() && !rdonly_)
    {
-      successor_->Close();
-      return oret;
-   }
-
-   if (pages_->IsReadOnly() && !rdonly_)
-   {
-      (void)pageMapClose(tpath_);
-      pages_.reset();
-      successor_->Close();
+      (void)Close();
       return -EROFS;
    }
    return XrdOssOK;
@@ -335,15 +333,15 @@ ssize_t XrdOssIntegrityFile::Read(off_t offset, size_t blen)
 
 ssize_t XrdOssIntegrityFile::Read(void *buff, off_t offset, size_t blen)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockTrackinglen(rg, offset, offset+blen, true);
+   Pages()->LockTrackinglen(rg, offset, offset+blen, true);
 
    const ssize_t bread = successor_->Read(buff, offset, blen);
    if (bread<0 || blen==0) return bread;
 
-   const ssize_t puret = pages_->VerifyRange(successor_, buff, offset, bread, rg);
+   const ssize_t puret = Pages()->VerifyRange(successor_, buff, offset, bread, rg);
    if (puret<0) return puret;
    if (puret != bread)
    {
@@ -354,15 +352,15 @@ ssize_t XrdOssIntegrityFile::Read(void *buff, off_t offset, size_t blen)
 
 ssize_t XrdOssIntegrityFile::ReadRaw(void *buff, off_t offset, size_t blen)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockTrackinglen(rg, offset, offset+blen, true);
+   Pages()->LockTrackinglen(rg, offset, offset+blen, true);
 
    const ssize_t bread = successor_->ReadRaw(buff, offset, blen);
    if (bread<0 || blen==0) return bread;
 
-   const ssize_t puret = pages_->VerifyRange(successor_, buff, offset, bread, rg);
+   const ssize_t puret = Pages()->VerifyRange(successor_, buff, offset, bread, rg);
    if (puret<0) return puret;
    if (puret != bread)
    {
@@ -373,7 +371,7 @@ ssize_t XrdOssIntegrityFile::ReadRaw(void *buff, off_t offset, size_t blen)
 
 ssize_t XrdOssIntegrityFile::ReadV(XrdOucIOVec *readV, int n)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
    if (n==0) return 0;
 
    XrdOssIntegrityRangeGuard rg;
@@ -386,7 +384,7 @@ ssize_t XrdOssIntegrityFile::ReadV(XrdOucIOVec *readV, int n)
       if (p1<start) start = p1;
       if (p2>end) end = p2;
    }
-   pages_->LockTrackinglen(rg, start, end, true);
+   Pages()->LockTrackinglen(rg, start, end, true);
 
    // standard OSS gives -ESPIPE in case of partial read of an element
    ssize_t rret = successor_->ReadV(readV, n);
@@ -394,7 +392,7 @@ ssize_t XrdOssIntegrityFile::ReadV(XrdOucIOVec *readV, int n)
    for (int i=0; i<n; i++)
    {
       if (readV[i].size == 0) continue;
-      ssize_t puret = pages_->VerifyRange(successor_, readV[i].data, readV[i].offset, readV[i].size, rg);
+      ssize_t puret = Pages()->VerifyRange(successor_, readV[i].data, readV[i].offset, readV[i].size, rg);
       if (puret<0) return puret;
       if (puret != readV[i].size)
       {
@@ -406,13 +404,13 @@ ssize_t XrdOssIntegrityFile::ReadV(XrdOucIOVec *readV, int n)
 
 ssize_t XrdOssIntegrityFile::Write(const void *buff, off_t offset, size_t blen)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockTrackinglen(rg, offset, offset+blen, false);
+   Pages()->LockTrackinglen(rg, offset, offset+blen, false);
 
-   int puret = pages_->UpdateRange(successor_, buff, offset, blen, rg);
+   int puret = Pages()->UpdateRange(successor_, buff, offset, blen, rg);
    if (puret<0)
    {
       rg.ReleaseAll();
@@ -439,7 +437,7 @@ ssize_t XrdOssIntegrityFile::Write(const void *buff, off_t offset, size_t blen)
 
 ssize_t XrdOssIntegrityFile::WriteV(XrdOucIOVec *writeV, int n)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
    if (n==0) return 0;
 
@@ -453,11 +451,11 @@ ssize_t XrdOssIntegrityFile::WriteV(XrdOucIOVec *writeV, int n)
       if (p1<start) start = p1;
       if (p2>end) end = p2;
    }
-   pages_->LockTrackinglen(rg, start, end, false);
+   Pages()->LockTrackinglen(rg, start, end, false);
 
    for (int i=0; i<n; i++)
    {
-      int ret = pages_->UpdateRange(successor_, writeV[i].data, writeV[i].offset, writeV[i].size, rg);
+      int ret = Pages()->UpdateRange(successor_, writeV[i].data, writeV[i].offset, writeV[i].size, rg);
       if (ret<0)
       {
          rg.ReleaseAll();
@@ -477,13 +475,13 @@ ssize_t XrdOssIntegrityFile::WriteV(XrdOucIOVec *writeV, int n)
 
 ssize_t XrdOssIntegrityFile::pgRead(void *buffer, off_t offset, size_t rdlen, uint32_t *csvec, uint64_t opts)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
 
    // this is a tighter restriction that FetchRange requires
    if ((rdlen % XrdSys::PageSize) != 0) return -EINVAL;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockTrackinglen(rg, offset, offset+rdlen, true);
+   Pages()->LockTrackinglen(rg, offset, offset+rdlen, true);
 
    ssize_t toread = rdlen;
    ssize_t bread = 0;
@@ -498,7 +496,7 @@ ssize_t XrdOssIntegrityFile::pgRead(void *buffer, off_t offset, size_t rdlen, ui
    } while(toread>0 && (bread % XrdSys::PageSize)!=0);
    if (rdlen == 0) return bread;
 
-   ssize_t puret = pages_->FetchRange(successor_, buffer, offset, bread, csvec, opts, rg);
+   ssize_t puret = Pages()->FetchRange(successor_, buffer, offset, bread, csvec, opts, rg);
    if (puret<0) return puret;
    if (puret != bread)
    {
@@ -509,7 +507,7 @@ ssize_t XrdOssIntegrityFile::pgRead(void *buffer, off_t offset, size_t rdlen, ui
 
 ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, uint32_t *csvec, uint64_t opts)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
    uint64_t pgopts = opts;
 
@@ -524,9 +522,9 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
    }
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockTrackinglen(rg, offset, offset+wrlen, false);
+   Pages()->LockTrackinglen(rg, offset, offset+wrlen, false);
 
-   int puret = pages_->StoreRange(successor_, buffer, offset, wrlen, csvec, pgopts, rg);
+   int puret = Pages()->StoreRange(successor_, buffer, offset, wrlen, csvec, pgopts, rg);
    if (puret<0) {
       rg.ReleaseAll();
       resyncSizes();
@@ -552,9 +550,9 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
 
 int XrdOssIntegrityFile::Fsync()
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
 
-   const int psret = pages_->Fsync();
+   const int psret = Pages()->Fsync();
    const int ssret = successor_->Fsync();
    if (psret<0) return psret;
    return ssret;
@@ -562,12 +560,12 @@ int XrdOssIntegrityFile::Fsync()
 
 int XrdOssIntegrityFile::Ftruncate(unsigned long long flen)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
 
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockTrackinglen(rg, flen, LLONG_MAX, false);
-   int ret = pages_->truncate(successor_, flen, rg);
+   Pages()->LockTrackinglen(rg, flen, LLONG_MAX, false);
+   int ret = Pages()->truncate(successor_, flen, rg);
    if (ret<0)
    {
       rg.ReleaseAll();
@@ -585,9 +583,9 @@ int XrdOssIntegrityFile::Ftruncate(unsigned long long flen)
 
 int XrdOssIntegrityFile::Fstat(struct stat *buff)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
    XrdOssIntegrityPages::Sizes_t sizes;
-   const int tsret = pages_->TrackedSizesGet(sizes, false);
+   const int tsret = Pages()->TrackedSizesGet(sizes, false);
    const int fsret = successor_->Fstat(buff);
    if (fsret<0) return fsret;
    if (tsret<0) return 0;
@@ -598,22 +596,132 @@ int XrdOssIntegrityFile::Fstat(struct stat *buff)
 int XrdOssIntegrityFile::resyncSizes()
 {
    XrdOssIntegrityRangeGuard rg;
-   pages_->LockTrackinglen(rg, 0, LLONG_MAX, false);
+   Pages()->LockTrackinglen(rg, 0, LLONG_MAX, false);
    struct stat sbuff;
    int ret = successor_->Fstat(&sbuff);
    if (ret<0) return ret;
-   pages_->LockResetSizes(sbuff.st_size);
+   Pages()->LockResetSizes(sbuff.st_size);
    return 0;
 }
 
 void XrdOssIntegrityFile::Flush()
 {
-   pages_->Flush();
+   if (!pmi_) return;
+
+   Pages()->Flush();
    successor_->Flush();
 }
 
 int XrdOssIntegrityFile::VerificationStatus()
 {
-   if (!pages_) return 0;
-   return pages_->VerificationStatus();
+   if (!pmi_) return 0;
+   return Pages()->VerificationStatus();
+}
+
+int XrdOssIntegrityFile::FRename(const char *newname, XrdOucEnv *old_env, XrdOucEnv *new_env)
+{
+   if (!pmi_) return -EBADF;
+   if (rdonly_) return -EBADF;
+
+   std::string inew(newname);
+   inew += ".xrdt";
+
+   // in case target name exists get its mapinfo
+   std::shared_ptr<puMapItem_t> newpmi;
+   {
+      XrdSysMutexHelper lck(pumtx_);
+      auto mapidx = pumap_.find(inew);
+      if (mapidx != pumap_.end())
+      {
+         newpmi = mapidx->second;
+         assert(!newpmi->unlinked);
+      }
+   }
+
+   // rename to self, do nothing
+   if (newpmi == pmi_) return 0;
+
+   XrdSysMutexHelper lck(newpmi ? &newpmi->mtx : NULL);
+   if (newpmi && newpmi->unlinked)
+   {
+     // something overwrote the target file since we checked
+     lck.UnLock();
+     return FRename(newname, old_env, new_env);
+   }
+
+   XrdSysMutexHelper lck2(pmi_->mtx);
+   if (pmi_->unlinked)
+   {
+      // if we've already been unlinked, can not rename
+      return -ENOENT;
+   }
+
+   std::string oldtag = pmi_->tpath;
+   std::string olddata = pmi_->dpath;
+
+   const int sret = parentOss_->Rename(pmi_->dpath.c_str(), newname, old_env, new_env);
+   if (sret<0) return sret;
+
+   const int iret = parentOss_->Rename(pmi_->tpath.c_str(), inew.c_str(), old_env, new_env);
+   if (iret<0)
+   {
+      if (iret == -ENOENT)
+      {
+         // if there is no tag file for oldfile, but newfile existed previously with a tag file,
+         // we don't want to be left with the previously existing tagfile
+         (void) parentOss_->Unlink(inew.c_str(), 0, new_env);
+      }
+      else
+      {
+         (void) parentOss_->Rename(newname, pmi_->dpath.c_str(), new_env, old_env);
+         return iret;
+      }
+   }
+
+   if (newpmi)
+   {
+      newpmi->unlinked = true;
+   }
+
+   {
+      XrdSysMutexHelper lck3(pumtx_);
+      auto mapidx_new = pumap_.find(inew);
+      if (mapidx_new != pumap_.end()) pumap_.erase(mapidx_new);
+
+      auto mapidx = pumap_.find(pmi_->tpath);
+      assert(mapidx != pumap_.end());
+
+      pumap_.erase(mapidx);
+      pumap_.insert(std::make_pair(inew, pmi_));
+      pmi_->dpath = newname;
+      pmi_->tpath = inew;
+   }
+
+   return XrdOssOK;
+}
+
+int XrdOssIntegrityFile::FUnlink(int Opts, XrdOucEnv *eP)
+{
+   if (!pmi_) return -EBADF;
+   if (rdonly_) return -EBADF;
+
+   int utret = 0;
+
+   XrdSysMutexHelper lck(pmi_->mtx);
+   if (!pmi_->unlinked)
+   {
+      const int uret = parentOss_->Unlink(pmi_->dpath.c_str(), Opts, eP);
+      if (uret != XrdOssOK) return uret;
+
+      utret = parentOss_->Unlink(pmi_->tpath.c_str(), Opts, eP);
+
+      XrdSysMutexHelper lck2(pumtx_);
+      auto mapidx = pumap_.find(pmi_->tpath);
+      assert(mapidx != pumap_.end());
+      pumap_.erase(mapidx);
+   }
+
+   pmi_->unlinked = true;
+
+   return (utret == -ENOENT) ? 0 : utret;
 }

@@ -246,7 +246,7 @@ void XrdOssIntegrityFileAioJob::DoItRead()
    ssize_t puret;
    if (pg_)
    {
-      puret = fp_->pages_->FetchRange(fp_->successor_,
+      puret = fp_->Pages()->FetchRange(fp_->successor_,
                                       (void *)nio_->sfsAio.aio_buf,
                                       (off_t)nio_->sfsAio.aio_offset,
                                       (size_t)nio_->Result,
@@ -256,7 +256,7 @@ void XrdOssIntegrityFileAioJob::DoItRead()
    }
    else
    {
-      puret = fp_->pages_->VerifyRange(fp_->successor_,
+      puret = fp_->Pages()->VerifyRange(fp_->successor_,
                                        (void *)nio_->sfsAio.aio_buf,
                                        (off_t)nio_->sfsAio.aio_offset,
                                        (size_t)nio_->Result,
@@ -279,18 +279,18 @@ void XrdOssIntegrityFileAioJob::DoItWrite()
    // this job runs before async Write
 
    // lock range
-   fp_->pages_->LockTrackinglen(nio_->rg_, (off_t)aiop_->sfsAio.aio_offset,
+   fp_->Pages()->LockTrackinglen(nio_->rg_, (off_t)aiop_->sfsAio.aio_offset,
                                 (off_t)(aiop_->sfsAio.aio_offset+aiop_->sfsAio.aio_nbytes), false);
    int puret;
    if (pg_) {
-      puret = fp_->pages_->StoreRange(fp_->successor_,
+      puret = fp_->Pages()->StoreRange(fp_->successor_,
                                       (const void *)aiop_->sfsAio.aio_buf, (off_t)aiop_->sfsAio.aio_offset,
                                       (size_t)aiop_->sfsAio.aio_nbytes, (uint32_t*)aiop_->cksVec, nio_->pgOpts_, nio_->rg_);
 
    }
    else
    {
-      puret = fp_->pages_->UpdateRange(fp_->successor_,
+      puret = fp_->Pages()->UpdateRange(fp_->successor_,
                                        (const void *)aiop_->sfsAio.aio_buf, (off_t)aiop_->sfsAio.aio_offset,
                                        (size_t)aiop_->sfsAio.aio_nbytes, nio_->rg_);
    }

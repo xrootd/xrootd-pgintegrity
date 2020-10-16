@@ -55,18 +55,18 @@ XrdOssIntegrityFileAioStore::~XrdOssIntegrityFileAioStore()
 
 int XrdOssIntegrityFile::Read(XrdSfsAio *aiop)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aiop, this, false, 0, true);
-   pages_->LockTrackinglen(nio->rg_, (off_t)aiop->sfsAio.aio_offset,
+   pmi_->pages->LockTrackinglen(nio->rg_, (off_t)aiop->sfsAio.aio_offset,
                                      (off_t)(aiop->sfsAio.aio_offset+aiop->sfsAio.aio_nbytes), true);
    return successor_->Read(nio);
 }
 
 int XrdOssIntegrityFile::Write(XrdSfsAio *aiop)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
@@ -77,21 +77,21 @@ int XrdOssIntegrityFile::Write(XrdSfsAio *aiop)
 
 int XrdOssIntegrityFile::pgRead (XrdSfsAio *aioparm, uint64_t opts)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
 
    // this is a tighter restriction that FetchRange requires
    if ((aioparm->sfsAio.aio_nbytes % XrdSys::PageSize) !=0) return -EINVAL;
 
    XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, opts, true);
-   pages_->LockTrackinglen(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
+   pmi_->pages->LockTrackinglen(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
                                      (off_t)(aioparm->sfsAio.aio_offset+aioparm->sfsAio.aio_nbytes), true);
    return successor_->Read(nio);
 }
 
 int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
 {
-   if (!pages_) return -EBADF;
+   if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
    uint64_t pgopts = opts;
 
