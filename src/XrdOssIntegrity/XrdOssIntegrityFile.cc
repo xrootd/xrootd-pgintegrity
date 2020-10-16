@@ -612,7 +612,7 @@ void XrdOssIntegrityFile::Flush()
    successor_->Flush();
 }
 
-int XrdOssIntegrityFile::VerificationStatus() const
+int XrdOssIntegrityFile::VerificationStatus()
 {
    if (!pages_) return 0;
    return pages_->VerificationStatus();

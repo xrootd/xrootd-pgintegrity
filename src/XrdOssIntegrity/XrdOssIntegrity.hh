@@ -122,7 +122,7 @@ virtual        ~XrdOssIntegrityFile();
            --aioCntWaiters_;
         }
 
-        int VerificationStatus() const;
+        int VerificationStatus();
 
 struct puMapItem_t {
    XrdSysCondVar cond;

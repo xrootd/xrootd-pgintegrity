@@ -64,7 +64,7 @@ public:
    int TrackedSizesGet(Sizes_t &, bool);
    int LockResetSizes(off_t);
    void TrackedSizeRelease();
-   int VerificationStatus() const;
+   int VerificationStatus();
 
 protected:
    ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, uint32_t *, bool, bool, uint32_t, uint32_t);

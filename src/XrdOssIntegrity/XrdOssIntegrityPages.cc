@@ -630,13 +630,18 @@ int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const
    return StoreRangeAligned(buff,offset,blen,sizes,csvec);
 }
 
-int XrdOssIntegrityPages::VerificationStatus() const
+int XrdOssIntegrityPages::VerificationStatus()
 {
    if (hasMissingTags_)
    {
       return 0;
    }
-   if (ts_->IsVerified())
+   bool iv;
+   {
+      XrdSysCondVarHelper lck(&tscond_);
+      iv = ts_->IsVerified();
+   }
+   if (iv)
    {
       return XrdOss::PF_csVer;
    }
