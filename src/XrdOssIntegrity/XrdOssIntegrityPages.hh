@@ -44,7 +44,7 @@ class XrdOssIntegrityPages
 public:
    typedef std::pair<off_t,off_t> Sizes_t;
 
-   XrdOssIntegrityPages(std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh, bool am);
+   XrdOssIntegrityPages(const std::string &fn, std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh, bool am, const std::string &);
    ~XrdOssIntegrityPages() { (void)Close(); }
 
    int Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP);
@@ -78,6 +78,9 @@ protected:
 
    XrdSysCondVar tscond_;
    bool tsforupdate_;
+
+   const std::string fn_;
+   const std::string tident_;
 
    int LockSetTrackedSize(off_t);
    int LockTruncateSize(off_t,bool);

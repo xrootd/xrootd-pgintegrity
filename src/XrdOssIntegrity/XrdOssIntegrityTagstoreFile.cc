@@ -29,14 +29,19 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "XrdOssIntegrityTrace.hh"
 #include "XrdOssIntegrityTagstoreFile.hh"
 
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+extern XrdOucTrace  OssIntegrityTrace;
+
 int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const int Oflag, XrdOucEnv &Env)
 {
+   EPNAME("TagstoreFile::Open");
+
    const int ret = fd_->Open(path, Oflag, 0600, Env);
    if (ret<0)
    {
@@ -111,6 +116,11 @@ int XrdOssIntegrityTagstoreFile::Open(const char *path, const off_t dsize, const
       {
          return -EIO;
       }
+   }
+
+   if (trackinglen_ != dsize)
+   {
+      TRACE(Warn, "Tagfile disagrees with actual filelength for " << fn_ << " expected " << trackinglen_ << " actual " << dsize);
    }
 
    const int rsret = ResetSizes(dsize);

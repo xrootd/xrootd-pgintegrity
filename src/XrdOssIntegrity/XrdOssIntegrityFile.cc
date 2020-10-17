@@ -30,6 +30,7 @@
 /******************************************************************************/
 
 #include "XrdOssIntegrity.hh"
+#include "XrdOssIntegrityTrace.hh"
 #include "XrdOssIntegrityTagstoreFile.hh"
 #include "XrdOssIntegrityPages.hh"
 #include "XrdOssIntegrityRanges.hh"
@@ -50,6 +51,9 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <assert.h>
+
+extern XrdSysError  OssIntegrityEroute;
+extern XrdOucTrace  OssIntegrityTrace;
 
 // storage for class members
 XrdSysMutex XrdOssIntegrityFile::pumtx_;
@@ -144,7 +148,7 @@ int XrdOssIntegrityFile::pageAndFileOpen(const char *fn, const int dflags, const
          return XrdOssOK;
       }
      
-      pageret = createPageUpdater(pmi_->tpath, Oflag, Env, pmi_->pages);
+      pageret = createPageUpdater(Oflag, Env);
       if (pageret == XrdOssOK)
       {
          return XrdOssOK;
@@ -197,14 +201,14 @@ int XrdOssIntegrityFile::Close(long long *retsz)
    return csret;
 }
 
-int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int Oflag, XrdOucEnv &Env, std::unique_ptr<XrdOssIntegrityPages> &retpages)
+int XrdOssIntegrityFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
 {
    XrdOucEnv newEnv;
-   newEnv.Put("oss.cgroup", config_->xrdtSpaceName().c_str());
+   newEnv.Put("oss.cgroup", config_.xrdtSpaceName().c_str());
 
    char *tmp;
    long long cgSize=0;
-   if ((tmp = Env.Get("oss.asize")) && XrdOuca2x::a2sz(config_->err(),"invalid asize",tmp,&cgSize,0))
+   if ((tmp = Env.Get("oss.asize")) && XrdOuca2x::a2sz(OssIntegrityEroute,"invalid asize",tmp,&cgSize,0))
    {
       cgSize=0;
    }
@@ -242,7 +246,7 @@ int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int O
    if ((tagFlags & O_CREAT))
    {
       const int crOpts = XRDOSS_mkpath;
-      const int ret = parentOss_->Create(tident_, tpath.c_str(), 0600, newEnv, (tagFlags<<8)|crOpts);
+      const int ret = parentOss_->Create(tident_, pmi_->tpath.c_str(), 0600, newEnv, (tagFlags<<8)|crOpts);
       if (ret != XrdOssOK && ret != -ENOTSUP && ret != -EROFS)
       {
          return ret;
@@ -250,16 +254,16 @@ int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int O
    }
 
    std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident_));
-   std::unique_ptr<XrdOssIntegrityTagstore> ts(new XrdOssIntegrityTagstoreFile(std::move(integFile)));
-   std::unique_ptr<XrdOssIntegrityPages> pages(new XrdOssIntegrityPages(std::move(ts), config_->fillFileHole(), config_->allowMissingTags()));
+   std::unique_ptr<XrdOssIntegrityTagstore> ts(new XrdOssIntegrityTagstoreFile(pmi_->dpath, std::move(integFile), tident_));
+   std::unique_ptr<XrdOssIntegrityPages> pages(new XrdOssIntegrityPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), tident_));
 
-   int puret = pages->Open(tpath.c_str(), sb.st_size, tagFlags, newEnv);
+   int puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, tagFlags, newEnv);
    if (puret<0)
    {
       if (puret == -EROFS && rdonly_)
       {
          // try to open tag file readonly
-         puret = pages->Open(tpath.c_str(), sb.st_size, O_RDONLY, newEnv);
+         puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, O_RDONLY, newEnv);
       }
    }
 
@@ -268,7 +272,7 @@ int XrdOssIntegrityFile::createPageUpdater(const std::string &tpath, const int O
       return puret;
    }
 
-   retpages = std::move(pages);
+   pmi_->pages = std::move(pages);
    return XrdOssOK;
 }
 

@@ -42,7 +42,7 @@
 class XrdOssIntegrityTagstoreFile : public XrdOssIntegrityTagstore
 {
 public:
-   XrdOssIntegrityTagstoreFile(std::unique_ptr<XrdOssDF> fd) : fd_(std::move(fd)), trackinglen_(0), isOpen(false) { }
+   XrdOssIntegrityTagstoreFile(const std::string &fn, std::unique_ptr<XrdOssDF> fd, const std::string &tid) : fn_(fn), fd_(std::move(fd)), trackinglen_(0), isOpen(false), tident_(tid) { }
    virtual ~XrdOssIntegrityTagstoreFile() { if (isOpen) { (void)Close(); } }
 
    virtual int Open(const char *, off_t, int, XrdOucEnv &) /* override */;
@@ -134,10 +134,12 @@ public:
    }
 
 private:
+   const std::string fn_;
    std::unique_ptr<XrdOssDF> fd_;
    off_t trackinglen_;
    off_t actualsize_;
    bool isOpen;
+   const std::string tident_;
    bool machineIsBige_;
    bool fileIsBige_;
    uint8_t header_[20];

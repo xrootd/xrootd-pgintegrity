@@ -29,6 +29,7 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "XrdOssIntegrityTrace.hh"
 #include "XrdOssIntegrity.hh"
 #include "XrdOssIntegrityConfig.hh"
 #include "XrdOuc/XrdOucEnv.hh"
@@ -44,6 +45,9 @@
 
 XrdVERSIONINFO(XrdOssAddStorageSystem2,XrdOssIntegrity)
 
+XrdSysError OssIntegrityEroute(0, "ossintegrity_");
+XrdOucTrace OssIntegrityTrace(&OssIntegrityEroute);
+
 XrdScheduler *XrdOssIntegrity::Sched_;
 
 // skip tag files in directory listing
@@ -58,8 +62,15 @@ int XrdOssIntegrityDir::Readdir(char *buff, int blen)
    return ret;
 }
 
-int XrdOssIntegrity::Init(XrdSysLogger *lP, const char *cP, XrdOucEnv *env)
+int XrdOssIntegrity::Init(XrdSysLogger *lP, const char *cP, const char *params, XrdOucEnv *env)
 {
+   OssIntegrityEroute.logger(lP);
+
+   int cret = config_.Init(OssIntegrityEroute, cP, params, env);
+   if (cret != XrdOssOK)
+   {
+      return cret;
+   }
 
    if ( ! env ||
         ! (Sched_ = (XrdScheduler*) env->GetPtr("XrdScheduler*")))
@@ -242,13 +253,8 @@ XrdOss *XrdOssAddStorageSystem2(XrdOss       *curr_oss,
                                 const char   *parms,
                                 XrdOucEnv    *envP)
 {
-   std::shared_ptr<XrdOssIntegrityConfig> cf(new XrdOssIntegrityConfig(Logger));
-   if (cf->Init(Logger, config_fn, parms, envP) != XrdOssOK)
-   {
-      return NULL;
-   }
-   XrdOssIntegrity *myOss = new XrdOssIntegrity(curr_oss, cf);
-   if (myOss->Init(Logger, config_fn, envP) != XrdOssOK)
+   XrdOssIntegrity *myOss = new XrdOssIntegrity(curr_oss);
+   if (myOss->Init(Logger, config_fn, parms, envP) != XrdOssOK)
    {
       delete myOss;
       return NULL;

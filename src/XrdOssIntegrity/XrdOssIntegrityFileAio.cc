@@ -29,6 +29,7 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "XrdOssIntegrityTrace.hh"
 #include "XrdOssIntegrity.hh"
 #include "XrdOssIntegrityPages.hh"
 #include "XrdOssIntegrityFileAio.hh"
@@ -42,6 +43,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <limits.h>
+
+extern XrdOucTrace  OssIntegrityTrace;
 
 XrdOssIntegrityFileAioStore::~XrdOssIntegrityFileAioStore()
 {

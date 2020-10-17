@@ -26,6 +26,7 @@ add_library(
   XrdOssIntegrity/XrdOssIntegrityConfig.cc                XrdOssIntegrity/XrdOssIntegrityConfig.hh
                                                           XrdOssIntegrity/XrdOssIntegrityTagstore.hh
                                                           XrdOssIntegrity/XrdOssHandler.hh
+                                                          XrdOssIntegrity/XrdOssIntegrityTrace.hh
   )
 
 target_link_libraries(

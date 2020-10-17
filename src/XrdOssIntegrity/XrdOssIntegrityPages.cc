@@ -29,6 +29,7 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "XrdOssIntegrityTrace.hh"
 #include "XrdOssIntegrityPages.hh"
 #include "XrdOuc/XrdOucCRC.hh"
 #include "XrdSys/XrdSysPageSize.hh"
@@ -39,20 +40,25 @@
 
 #include <assert.h>
 
-XrdOssIntegrityPages::XrdOssIntegrityPages(std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh, bool am) :
+extern XrdOucTrace  OssIntegrityTrace;
+
+XrdOssIntegrityPages::XrdOssIntegrityPages(const std::string &fn, std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh, bool am, const std::string &tid) :
         ts_(std::move(ts)),
         writeHoles_(wh),
         allowMissingTags_(am),
         hasMissingTags_(false),
         rdonly_(false),
         tscond_(0),
-        tsforupdate_(false)
+        tsforupdate_(false),
+        fn_(fn),
+        tident_(tid)
 {
    // empty constructor
 }
 
 int XrdOssIntegrityPages::Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP)
 {
+   EPNAME("Pages::Open");
    hasMissingTags_ = false;
    rdonly_ = false;
    int ret = ts_->Open(path, dsize, flags, envP);
@@ -64,6 +70,7 @@ int XrdOssIntegrityPages::Open(const char *path, off_t dsize, int flags, XrdOucE
          hasMissingTags_ = true;
          return 0;
       }
+      TRACE(Warn, "Could not open tagfile for " << fn_ << " error " << ret);
       return -EIO;
    }
    if (ret<0) return ret;
@@ -195,6 +202,8 @@ int XrdOssIntegrityPages::UpdateRange(XrdOssDF *const fd, const void *buff, cons
 
 ssize_t XrdOssIntegrityPages::VerifyRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssIntegrityRangeGuard &rg)
 {
+   EPNAME("VerifyRange");
+
    if (offset<0)
    {
       return -EINVAL;
@@ -216,8 +225,9 @@ ssize_t XrdOssIntegrityPages::VerifyRange(XrdOssDF *const fd, const void *buff, 
 
    if (blen == 0)
    {
-      // if offset if before the tracked len we should not be requested to verify zero bytes:
+      // if offset is before the tracked len we should not be requested to verify zero bytes:
       // the file may have been truncated
+      TRACE(Warn, "Verify request for zero bytes " << fn_ << ", file may be truncated");
       return -EIO;
    }
 
@@ -308,6 +318,7 @@ ssize_t XrdOssIntegrityPages::apply_sequential_aligned_modify(
 
 ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *const csvec, const uint64_t opts)
 {
+   EPNAME("FetchRangeAligned");
    if (csvec == NULL && !(opts & XrdOssDF::Verify))
    {
       // if the crc values are not wanted nor checks against data, then
@@ -362,6 +373,9 @@ ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const of
             XrdOucCRC::Calc32C(&p[XrdSys::PageSize*(nread+nverif)],databytes,vrbuf);
             if (memcmp(vrbuf, &rdbuf[(nread+nverif)%rdbufsz], 4*vcnt))
             {
+               size_t badpg;
+               for(badpg=0;badpg<vcnt;++badpg) { if (memcmp(&vrbuf[badpg],&rdbuf[(nread+nverif+badpg)%rdbufsz],4)) break; }
+               TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*(p1+nread+nverif+badpg));
                return -EDOM;
             }
             toverif -= vcnt;
@@ -458,6 +472,8 @@ void XrdOssIntegrityPages::LockTrackinglen(XrdOssIntegrityRangeGuard &rg, const 
 
 int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIntegrityRangeGuard &rg)
 {
+   EPNAME("truncate");
+
    if (len<0) return -EINVAL;
 
    // nothing to truncate if there is no tag file
@@ -499,6 +515,7 @@ int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIn
          if (rret<0) return rret;
          if (crc32v != crc32c)
          {
+            TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p_until);
             return -EDOM;
          }
       }
@@ -520,6 +537,7 @@ ssize_t XrdOssIntegrityPages::FetchRange(
    XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen,
    uint32_t *csvec, const uint64_t opts, XrdOssIntegrityRangeGuard &rg)
 {
+   EPNAME("FetchRange");
    if (offset<0)
    {
       return -EINVAL;
@@ -551,6 +569,7 @@ ssize_t XrdOssIntegrityPages::FetchRange(
    {
       // if offset if before the tracked len we should not be requested to verify zero bytes:
       // the file may have been truncated
+      TRACE(Warn, "Verify request for zero bytes " << fn_ << ", file may be truncated");
       return -EIO;
    }
 

@@ -29,14 +29,19 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "XrdOssIntegrityTrace.hh"
 #include "XrdOssIntegrityPages.hh"
 #include "XrdOuc/XrdOucCRC.hh"
 #include "XrdSys/XrdSysPageSize.hh"
 
 #include <vector>
 
+extern XrdOucTrace  OssIntegrityTrace;
+
 int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, const Sizes_t &sizes)
 {
+   EPNAME("UpdateRangeHoleUntilPage");
+
    static const uint8_t bz[XrdSys::PageSize] = {0};
    static const uint32_t crczero = XrdOucCRC::Calc32C(bz, XrdSys::PageSize, 0U);
    static const std::vector<uint32_t> crc32Vec(stsize_, crczero);
@@ -50,18 +55,34 @@ int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t unt
    // if last tracked page is before page "until" extend it
    if (tracked_off>0)
    {
-      if (fd == NULL) return -EIO;
+      if (fd == NULL)
+      {
+         TRACE(Warn, "Unexpected partially filled last page " << fn_);
+         return -EIO;
+      }
       uint8_t b[XrdSys::PageSize];
       ssize_t rret = XrdOssIntegrityPages::maxread(fd, b, tracked_page*XrdSys::PageSize, XrdSys::PageSize);
       if (rret < 0) return rret;
-      if (static_cast<size_t>(rret) < tracked_off) return -EIO;
+      if (static_cast<size_t>(rret) < tracked_off)
+      {
+         TRACE(Warn, "Read to end of file " << fn_ << " read only " << rret << " instead of " << tracked_off << " bytes");
+         return -EIO;
+      }
       const ssize_t extra = rret - tracked_off;
-      if (memcmp(bz, &b[tracked_off], extra)) return -EIO;
+      if (memcmp(bz, &b[tracked_off], extra))
+      {
+         TRACE(Warn, "Read non-zero data past tracked EOF " << fn_);
+         return -EIO;
+      }
       uint32_t prevtag;
       rret = ts_->ReadTags(&prevtag, tracked_page, 1);
       if (rret < 0) return rret;
       uint32_t crc32c = XrdOucCRC::Calc32C(b, tracked_off, 0U);
-      if (crc32c != prevtag) return -EDOM;
+      if (crc32c != prevtag)
+      {
+         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*tracked_off);
+         return -EDOM;
+      }
       crc32c = XrdOucCRC::Calc32C(bz, XrdSys::PageSize - tracked_off, prevtag);
       const ssize_t wret = ts_->WriteTags(&crc32c, tracked_page, 1);
       if (wret < 0) return wret;
@@ -88,6 +109,7 @@ int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t unt
 
 int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
+   EPNAME("UpdateRangeUnaligned");
    const off_t p1 = offset / XrdSys::PageSize;
 
    const off_t trackinglen = sizes.first;
@@ -145,13 +167,18 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
          if (toread>0)
          {
             ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
-            if (rret<0) return -EIO;
+            if (rret<0)
+            {
+               TRACE(Warn, "Read error from " << fn_ << " result " << rret);
+               return -EIO;
+            }
             const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
             uint32_t crc32v;
             rret = ts_->ReadTags(&crc32v, p1, 1);
             if (rret<0) return rret;
             if (crc32v != crc32c)
             {
+               TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p1);
                return -EDOM;
             }
          }
@@ -200,13 +227,18 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
    if (toread>0)
    {
       ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p2, toread);
-      if (rret<0) return -EIO;
+      if (rret<0)
+      {
+         TRACE(Warn, "Read error from " << fn_ << " result " << rret);
+         return -EIO;
+      }
       const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
       uint32_t crc32v;
       rret = ts_->ReadTags(&crc32v, p2, 1);
       if (rret<0) return rret;
       if (crc32v != crc32c)
       {
+         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p2);
          return -EDOM;
       }
    }
@@ -222,6 +254,8 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
 
 ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
+   EPNAME("VerifyRangeUnaligned");
+
    const off_t p1 = offset / XrdSys::PageSize;
    const size_t p1_off = offset % XrdSys::PageSize;
    const off_t p2 = (offset+blen) / XrdSys::PageSize;
@@ -249,11 +283,15 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
       const size_t bcommon = std::min(bavail - p1_off, blen);
       if (memcmp(buff, &b[p1_off], bcommon))
       {
+         size_t badoff;
+         for(badoff=0;badoff<bcommon;badoff++) { if (((uint8_t*)buff)[badoff] != b[p1_off+badoff]) break; }
+         TRACE(Warn, "Page-read mismatches buffer from " << fn_ << " starting at offset " << XrdSys::PageSize*p1+p1_off+badoff);
          return -EIO;
       }
       const uint32_t crc32calc = XrdOucCRC::Calc32C(b, bavail, 0U);
       if (tbuf[0] != crc32calc)
       {
+         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*ntagsbase);
          return -EDOM;
       }
    }
@@ -289,6 +327,9 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
             }
             if (memcmp(&calcbuf[nvalid], &tbuf[tidx], 4*nv))
             {
+               size_t badpg;
+               for(badpg=0;badpg<nv;badpg++) { if (memcmp(&calcbuf[nvalid+badpg], &tbuf[tidx+badpg],4)) break; }
+               TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*(ntagsbase+tidx+badpg));
                return -EDOM;
             }
             tovalid -= nv;
@@ -309,6 +350,9 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
       const uint8_t *const p = (uint8_t*)buff;
       if (memcmp(&p[blen-p2_off], b, p2_off))
       {
+         size_t badoff;
+         for(badoff=0;badoff<p2_off;badoff++) { if (p[blen-p2_off+badoff] != b[badoff]) break; }
+         TRACE(Warn, "Page-read mismatches buffer from " << fn_ << " starting at offset " << XrdSys::PageSize*p2+badoff);
          return -EIO;
       }
       const uint32_t crc32calc = XrdOucCRC::Calc32C(b, bavail, 0U);
@@ -323,6 +367,7 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
       }
       if (tbuf[tidx] != crc32calc)
       {
+         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*(ntagsbase+tidx));
          return -EDOM;
       }
    }

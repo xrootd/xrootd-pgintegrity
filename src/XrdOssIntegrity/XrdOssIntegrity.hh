@@ -57,13 +57,13 @@ class XrdOssIntegrityDir : public XrdOssDFHandler
 {
 public:
 
-                XrdOssIntegrityDir(XrdOss *parent, const char *tid, std::shared_ptr<XrdOssIntegrityConfig> cf) : XrdOssDFHandler(parent->newDir(tid)), config_(cf) { }
+                XrdOssIntegrityDir(XrdOss *parent, const char *tid, XrdOssIntegrityConfig &cf) : XrdOssDFHandler(parent->newDir(tid)), config_(cf) { }
 virtual        ~XrdOssIntegrityDir() { }
 
 virtual int     Readdir(char *buff, int blen) /* override */;
 
 private:
-   std::shared_ptr<XrdOssIntegrityConfig> config_;
+   XrdOssIntegrityConfig &config_;
 };
 
 class XrdOssIntegrityFile : public XrdOssDFHandler
@@ -99,7 +99,7 @@ virtual int     pgRead (XrdSfsAio*, uint64_t) /* override */;
 virtual ssize_t pgWrite(void*, off_t, size_t, uint32_t*, uint64_t) /* override */;
 virtual int     pgWrite(XrdSfsAio*, uint64_t) /* override */;
 
-                XrdOssIntegrityFile(XrdOss *parent, const char *tid, std::shared_ptr<XrdOssIntegrityConfig> cf) :
+                XrdOssIntegrityFile(XrdOss *parent, const char *tid, XrdOssIntegrityConfig &cf) :
                     XrdOssDFHandler(parent->newFile(tid)), parentOss_(parent), tident_(tid), config_(cf),
                     rdonly_(false), aioCntCond_(0), aioCnt_(0), aioCntWaiters_(0) { }
 virtual        ~XrdOssIntegrityFile();
@@ -151,13 +151,13 @@ private:
         const char *tident_;
         std::shared_ptr<puMapItem_t> pmi_;
         XrdOssIntegrityFileAioStore aiostore_;
-        std::shared_ptr<XrdOssIntegrityConfig> config_;
+        XrdOssIntegrityConfig &config_;
         bool rdonly_;
 
         int resyncSizes();
         int pageMapClose();
         int pageAndFileOpen(const char *, const int, const int, const mode_t, XrdOucEnv &);
-        int createPageUpdater(const std::string &, int, XrdOucEnv &, std::unique_ptr<XrdOssIntegrityPages> &);
+        int createPageUpdater(int, XrdOucEnv &);
 
         XrdSysCondVar aioCntCond_;
         int           aioCnt_;
@@ -171,7 +171,8 @@ virtual XrdOssDF *newDir(const char *tident) /* override */ { return (XrdOssDF *
 virtual XrdOssDF *newFile(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssIntegrityFile(successor_, tident, config_); }
 
 virtual int       Init(XrdSysLogger *, const char *) /* override */ { return XrdOssOK; }
-virtual int       Init(XrdSysLogger *, const char *, XrdOucEnv *) /* override */;
+virtual int       Init(XrdSysLogger *, const char *, XrdOucEnv *) /* override */ { return XrdOssOK; }
+        int       Init(XrdSysLogger *, const char *, const char *, XrdOucEnv *);
 
 virtual uint64_t  Features() /* override */ { return (successor_->Features() | XRDOSS_HASFSCS); }
 
@@ -194,7 +195,7 @@ virtual int       StatPF(const char *path, struct stat *buff) /* override */ { r
 virtual int       StatXA(const char *path, char *buff, int &blen,
                          XrdOucEnv *envP=0) /* override */;
 
-                XrdOssIntegrity(XrdOss *successor, std::shared_ptr<XrdOssIntegrityConfig> cf) : XrdOssHandler(successor), config_(cf) { }
+                XrdOssIntegrity(XrdOss *successor) : XrdOssHandler(successor) { }
 virtual        ~XrdOssIntegrity() { }
 
    static bool isTagFile(const char *p)
@@ -206,7 +207,7 @@ virtual        ~XrdOssIntegrity() { }
    static XrdScheduler *Sched_;
 
 private:
-   std::shared_ptr<XrdOssIntegrityConfig> config_;
+   XrdOssIntegrityConfig config_;
 };
 
 extern "C" XrdOss *XrdOssAddStorageSystem2(XrdOss       *curr_oss,

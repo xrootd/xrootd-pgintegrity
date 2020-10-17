@@ -1,10 +1,13 @@
-#ifndef _XRDOSSINTEGRITYCONFIG_H
-#define _XRDOSSINTEGRITYCONFIG_H
+#ifndef _XRDOSSINTEGRITY_TRACE_H
+#define _XRDOSSINTEGRITY_TRACE_H
 /******************************************************************************/
 /*                                                                            */
-/*             X r d O s s I n t e g r i t y C o n f i g . h h                */
+/*                        X r d O s s T r a c e . h h                         */
 /*                                                                            */
-/* (C) Copyright 2020 CERN.                                                   */
+/* (C) 2003 by the Board of Trustees of the Leland Stanford, Jr., University  */
+/*                            All Rights Reserved                             */
+/*   Produced by Andrew Hanushevsky for Stanford University under contract    */
+/*                DE-AC02-76-SFO0515 with the Deprtment of Energy             */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -12,10 +15,6 @@
 /* the terms of the GNU Lesser General Public License as published by the     */
 /* Free Software Foundation, either version 3 of the License, or (at your     */
 /* option) any later version.                                                 */
-/*                                                                            */
-/* In applying this licence, CERN does not waive the privileges and           */
-/* immunities granted to it by virtue of its status as an Intergovernmental   */
-/* Organization or submit itself to any jurisdiction.                         */
 /*                                                                            */
 /* XRootD is distributed in the hope that it will be useful, but WITHOUT      */
 /* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or      */
@@ -31,37 +30,39 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOuc/XrdOucStream.hh"
-#include "XrdOuc/XrdOucEnv.hh"
-#include "XrdSys/XrdSysLogger.hh"
+#include "XrdOuc/XrdOucTrace.hh"
 
-#include <string>
+// Trace flags
+//
+#define TRACE_ALL       0x0fff
+#define TRACE_Warn      0x0001
+#define TRACE_Debug     0x0800
 
-class XrdOssIntegrityConfig
-{
-public:
+#ifndef NODEBUG
 
-  XrdOssIntegrityConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true) { }
-  ~XrdOssIntegrityConfig() { }
+#include "XrdSys/XrdSysHeaders.hh"
 
-  int Init(XrdSysError &, const char *, const char *, XrdOucEnv *);
+#define QTRACE(act) OssIntegrityTrace.What & TRACE_ ## act
 
-  bool fillFileHole() const { return fillFileHole_; }
+#define TRACE(act, x) \
+        if (QTRACE(act)) \
+           {OssIntegrityTrace.Beg(epname,tident_.c_str()); cerr <<x; OssIntegrityTrace.End();}
 
-  std::string xrdtSpaceName() const { return xrdtSpaceName_; }
+#define TRACEReturn(type, ecode, msg) \
+               {TRACE(type, "err " <<ecode <<msg); return ecode;}
 
-  bool allowMissingTags() const { return allowMissingTags_; }
+#define DEBUG(y) if (QTRACE(Debug)) \
+                    {OssIntegrityTrace.Beg(epname); cerr <<y; OssIntegrityTrace.End();}
 
-private:
-  int readConfig(XrdSysError &, const char *);
+#define EPNAME(x) static const char *epname = x;
 
-  int ConfigXeq(char *, XrdOucStream &, XrdSysError &);
+#else
 
-  int xtrace(XrdOucStream &, XrdSysError &);
+#define DEBUG(x)
+#define QTRACE(x) 0
+#define TRACE(x, y)
+#define TRACEReturn(type, ecode, msg) return ecode
+#define EPNAME(x)
 
-  bool fillFileHole_;
-  std::string xrdtSpaceName_;
-  bool allowMissingTags_;
-};
-
+#endif
 #endif
