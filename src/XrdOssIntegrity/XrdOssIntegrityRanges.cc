@@ -34,7 +34,7 @@
 
 #include <assert.h>
 
-void XrdOssIntegrityRangeGuard::ReleaseAll()
+void XrdOssCsiRangeGuard::ReleaseAll()
 {
    if (trackinglenlocked_)
    {
@@ -49,13 +49,13 @@ void XrdOssIntegrityRangeGuard::ReleaseAll()
    }
 }
 
-void XrdOssIntegrityRangeGuard::Wait()
+void XrdOssCsiRangeGuard::Wait()
 {
    assert(r_ != NULL);
    r_->Wait(rp_);
 }
 
-void XrdOssIntegrityRangeGuard::unlockTrackinglen()
+void XrdOssCsiRangeGuard::unlockTrackinglen()
 {
    assert(pages_ != NULL);
    assert(trackinglenlocked_ == true);
@@ -65,7 +65,7 @@ void XrdOssIntegrityRangeGuard::unlockTrackinglen()
    pages_ = NULL;
 }
 
-XrdOssIntegrityRangeGuard::~XrdOssIntegrityRangeGuard()
+XrdOssCsiRangeGuard::~XrdOssCsiRangeGuard()
 {
    ReleaseAll();
 }

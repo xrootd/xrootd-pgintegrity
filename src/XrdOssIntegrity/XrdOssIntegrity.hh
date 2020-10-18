@@ -1,5 +1,5 @@
-#ifndef _XRDOSSINTEGRITY_H
-#define _XRDOSSINTEGRITY_H
+#ifndef _XRDOSSCSI_H
+#define _XRDOSSCSI_H
 /******************************************************************************/
 /*                                                                            */
 /*                   X r d O s s I n t e g r i t y . h h                      */
@@ -40,36 +40,36 @@
 #include <unordered_map>
 
 // forward decl
-class XrdOssIntegrityFileAio;
-class XrdOssIntegrityFileAioJob;
+class XrdOssCsiFileAio;
+class XrdOssCsiFileAioJob;
 
-class XrdOssIntegrityFileAioStore
+class XrdOssCsiFileAioStore
 {
 public:
-   XrdOssIntegrityFileAioStore() : list_(NULL) { }
-   ~XrdOssIntegrityFileAioStore();
+   XrdOssCsiFileAioStore() : list_(NULL) { }
+   ~XrdOssCsiFileAioStore();
 
    std::mutex mtx_;
-   XrdOssIntegrityFileAio *list_;
+   XrdOssCsiFileAio *list_;
 };
 
-class XrdOssIntegrityDir : public XrdOssDFHandler
+class XrdOssCsiDir : public XrdOssDFHandler
 {
 public:
 
-                XrdOssIntegrityDir(XrdOss *parent, const char *tid, XrdOssIntegrityConfig &cf) : XrdOssDFHandler(parent->newDir(tid)), config_(cf) { }
-virtual        ~XrdOssIntegrityDir() { }
+                XrdOssCsiDir(XrdOss *parent, const char *tid, XrdOssCsiConfig &cf) : XrdOssDFHandler(parent->newDir(tid)), config_(cf) { }
+virtual        ~XrdOssCsiDir() { }
 
 virtual int     Readdir(char *buff, int blen) /* override */;
 
 private:
-   XrdOssIntegrityConfig &config_;
+   XrdOssCsiConfig &config_;
 };
 
-class XrdOssIntegrityFile : public XrdOssDFHandler
+class XrdOssCsiFile : public XrdOssDFHandler
 {
-friend class XrdOssIntegrityFileAio;
-friend class XrdOssIntegrityFileAioJob;
+friend class XrdOssCsiFileAio;
+friend class XrdOssCsiFileAioJob;
 public:
 
 virtual int     Close(long long *retsz=0) /* override */;
@@ -99,10 +99,10 @@ virtual int     pgRead (XrdSfsAio*, uint64_t) /* override */;
 virtual ssize_t pgWrite(void*, off_t, size_t, uint32_t*, uint64_t) /* override */;
 virtual int     pgWrite(XrdSfsAio*, uint64_t) /* override */;
 
-                XrdOssIntegrityFile(XrdOss *parent, const char *tid, XrdOssIntegrityConfig &cf) :
+                XrdOssCsiFile(XrdOss *parent, const char *tid, XrdOssCsiConfig &cf) :
                     XrdOssDFHandler(parent->newFile(tid)), parentOss_(parent), tident_(tid), config_(cf),
                     rdonly_(false), aioCntCond_(0), aioCnt_(0), aioCntWaiters_(0) { }
-virtual        ~XrdOssIntegrityFile();
+virtual        ~XrdOssCsiFile();
 
         void    aioInc() { XrdSysCondVarHelper lck(&aioCntCond_); ++aioCnt_; }
         void    aioDec()
@@ -124,14 +124,14 @@ virtual        ~XrdOssIntegrityFile();
 
         int VerificationStatus();
 
-        XrdOssIntegrityPages *Pages() {
+        XrdOssCsiPages *Pages() {
            return pmi_->pages.get();
         }
 
         struct puMapItem_t {
            int busy;                              // access under map's lock
            XrdSysMutex mtx;
-           std::unique_ptr<XrdOssIntegrityPages> pages;
+           std::unique_ptr<XrdOssCsiPages> pages;
            std::string dpath;
            std::string tpath;
            bool unlinked;
@@ -150,8 +150,8 @@ private:
         XrdOss *parentOss_;
         const char *tident_;
         std::shared_ptr<puMapItem_t> pmi_;
-        XrdOssIntegrityFileAioStore aiostore_;
-        XrdOssIntegrityConfig &config_;
+        XrdOssCsiFileAioStore aiostore_;
+        XrdOssCsiConfig &config_;
         bool rdonly_;
 
         int resyncSizes();
@@ -164,11 +164,11 @@ private:
         int           aioCntWaiters_;
 };
 
-class XrdOssIntegrity : public XrdOssHandler
+class XrdOssCsi : public XrdOssHandler
 {
 public:
-virtual XrdOssDF *newDir(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssIntegrityDir(successor_, tident, config_); }
-virtual XrdOssDF *newFile(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssIntegrityFile(successor_, tident, config_); }
+virtual XrdOssDF *newDir(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssCsiDir(successor_, tident, config_); }
+virtual XrdOssDF *newFile(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssCsiFile(successor_, tident, config_); }
 
 virtual int       Init(XrdSysLogger *lp, const char *cfn) /* override */ { return Init(lp, cfn, 0, 0); }
 virtual int       Init(XrdSysLogger *lp, const char *cfn, XrdOucEnv *envP) /* override */ { return Init(lp, cfn, 0, envP); }
@@ -195,8 +195,8 @@ virtual int       StatPF(const char *path, struct stat *buff) /* override */ { r
 virtual int       StatXA(const char *path, char *buff, int &blen,
                          XrdOucEnv *envP=0) /* override */;
 
-                XrdOssIntegrity(XrdOss *successor) : XrdOssHandler(successor) { }
-virtual        ~XrdOssIntegrity() { }
+                XrdOssCsi(XrdOss *successor) : XrdOssHandler(successor) { }
+virtual        ~XrdOssCsi() { }
 
    static bool isTagFile(const char *p)
    {
@@ -207,7 +207,7 @@ virtual        ~XrdOssIntegrity() { }
    static XrdScheduler *Sched_;
 
 private:
-   XrdOssIntegrityConfig config_;
+   XrdOssCsiConfig config_;
 };
 
 extern "C" XrdOss *XrdOssAddStorageSystem2(XrdOss       *curr_oss,

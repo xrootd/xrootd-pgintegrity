@@ -1,5 +1,5 @@
-#ifndef _XRDOSSINTEGRITY_TRACE_H
-#define _XRDOSSINTEGRITY_TRACE_H
+#ifndef _XRDOSSCSI_TRACE_H
+#define _XRDOSSCSI_TRACE_H
 /******************************************************************************/
 /*                                                                            */
 /*                        X r d O s s T r a c e . h h                         */
@@ -42,17 +42,17 @@
 
 #include "XrdSys/XrdSysHeaders.hh"
 
-#define QTRACE(act) OssIntegrityTrace.What & TRACE_ ## act
+#define QTRACE(act) OssCsiTrace.What & TRACE_ ## act
 
 #define TRACE(act, x) \
         if (QTRACE(act)) \
-           {OssIntegrityTrace.Beg(epname,tident_.c_str()); cerr <<x; OssIntegrityTrace.End();}
+           {OssCsiTrace.Beg(epname,tident_.c_str()); cerr <<x; OssCsiTrace.End();}
 
 #define TRACEReturn(type, ecode, msg) \
                {TRACE(type, "err " <<ecode <<msg); return ecode;}
 
 #define DEBUG(y) if (QTRACE(Debug)) \
-                    {OssIntegrityTrace.Beg(epname); cerr <<y; OssIntegrityTrace.End();}
+                    {OssCsiTrace.Beg(epname); cerr <<y; OssCsiTrace.End();}
 
 #define EPNAME(x) static const char *epname = x;
 

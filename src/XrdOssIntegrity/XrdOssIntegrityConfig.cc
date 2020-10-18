@@ -41,13 +41,13 @@
 #include <string>
 #include <vector>
 
-extern XrdOucTrace  OssIntegrityTrace;
+extern XrdOucTrace  OssCsiTrace;
 
 #define TS_Xeq(x,m)    if (!strcmp(x,var)) return m(Config, Eroute);
 
-int XrdOssIntegrityConfig::Init(XrdSysError &Eroute, const char *config_fn, const char *parms, XrdOucEnv *envP)
+int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char *parms, XrdOucEnv *envP)
 {
-   Eroute.Say("++++++ Integrity adding OSS layer initialization started.");
+   Eroute.Say("++++++ OssCsi plugin, for file verification with CRCs, initialization started.");
 
    std::stringstream ss(parms ? parms : "");
    std::string item;
@@ -75,21 +75,22 @@ int XrdOssIntegrityConfig::Init(XrdSysError &Eroute, const char *config_fn, cons
       }
    }
 
-   OssIntegrityTrace.What = TRACE_Warn;
-   if (getenv("XRDDEBUG")) OssIntegrityTrace.What = TRACE_ALL;
+   OssCsiTrace.What = TRACE_Warn;
+   if (getenv("XRDDEBUG")) OssCsiTrace.What = TRACE_ALL;
    readConfig(Eroute, config_fn);
 
    Eroute.Say("       compute file holes: ", fillFileHole_ ? "yes" : "no");
    Eroute.Say("       space: ", xrdtSpaceName_.c_str());
    Eroute.Say("       allow files without CRCs: ", allowMissingTags_ ? "yes" : "no");
-   Eroute.Say("       trace level: ", std::to_string(OssIntegrityTrace.What).c_str());
+   Eroute.Say("       trace level: ", std::to_string(OssCsiTrace.What).c_str());
 
-   Eroute.Say("++++++ Integrity adding OSS layer initialization completed.");
+   Eroute.Say("++++++ OssCsi plugin initialization completed.");
+
 
    return XrdOssOK;
 }
 
-int XrdOssIntegrityConfig::readConfig(XrdSysError &Eroute, const char *ConfigFN)
+int XrdOssCsiConfig::readConfig(XrdSysError &Eroute, const char *ConfigFN)
 {
    char *var;
    int cfgFD, retc, NoGo = XrdOssOK;
@@ -109,7 +110,7 @@ int XrdOssIntegrityConfig::readConfig(XrdSysError &Eroute, const char *ConfigFN)
    }
 
    Config.Attach(cfgFD);
-   static const char *cvec[] = { "*** ossintegrity plugin config:", 0 };
+   static const char *cvec[] = { "*** osscsi plugin config:", 0 };
    Config.Capture(cvec);
 
    while((var = Config.GetMyFirstWord()))
@@ -131,13 +132,13 @@ int XrdOssIntegrityConfig::readConfig(XrdSysError &Eroute, const char *ConfigFN)
    return NoGo;
 }
 
-int XrdOssIntegrityConfig::ConfigXeq(char *var, XrdOucStream &Config, XrdSysError &Eroute)
+int XrdOssCsiConfig::ConfigXeq(char *var, XrdOucStream &Config, XrdSysError &Eroute)
 {
    TS_Xeq("trace",         xtrace);
    return 0;
 }
 
-int XrdOssIntegrityConfig::xtrace(XrdOucStream &Config, XrdSysError &Eroute)
+int XrdOssCsiConfig::xtrace(XrdOucStream &Config, XrdSysError &Eroute)
 {
     char *val;
     static struct traceopts {const char *opname; int opval;} tropts[] =
@@ -165,6 +166,6 @@ int XrdOssIntegrityConfig::xtrace(XrdOucStream &Config, XrdSysError &Eroute)
                   }
           val = Config.GetWord();
          }
-    OssIntegrityTrace.What = trval;
+    OssCsiTrace.What = trval;
     return 0;
 }

@@ -1,5 +1,5 @@
-#ifndef _XRDOSSINTEGRITYFILEAIO_H
-#define _XRDOSSINTEGRITYFILEAIO_H
+#ifndef _XRDOSSCSIFILEAIO_H
+#define _XRDOSSCSIFILEAIO_H
 /******************************************************************************/
 /*                                                                            */
 /*           X r d O s s I n t e g r i t y F i l e A i o . h h                */
@@ -39,14 +39,14 @@
 #include <mutex>
 #include <thread>
 
-class XrdOssIntegrityFileAioJob : public XrdJob
+class XrdOssCsiFileAioJob : public XrdJob
 {
 public:
 
-   XrdOssIntegrityFileAioJob() { }
-   virtual ~XrdOssIntegrityFileAioJob() { }
+   XrdOssCsiFileAioJob() { }
+   virtual ~XrdOssCsiFileAioJob() { }
 
-   void Init(XrdOssIntegrityFile *fp, XrdOssIntegrityFileAio *nio, XrdSfsAio *aiop, bool isPg, bool read)
+   void Init(XrdOssCsiFile *fp, XrdOssCsiFileAio *nio, XrdSfsAio *aiop, bool isPg, bool read)
    {
       fp_   = fp;
       nio_  = nio;
@@ -65,19 +65,19 @@ public:
    void DoItWrite();
 
 private:
-   XrdOssIntegrityFile *fp_;
-   XrdOssIntegrityFileAio *nio_;
+   XrdOssCsiFile *fp_;
+   XrdOssCsiFileAio *nio_;
    XrdSfsAio *aiop_;
    bool pg_;
    bool read_;
 };
 
-class XrdOssIntegrityFileAio : public XrdSfsAio
+class XrdOssCsiFileAio : public XrdSfsAio
 {
-friend class XrdOssIntegrityFileAioStore;
+friend class XrdOssCsiFileAioStore;
 public:
 
-   XrdOssIntegrityRangeGuard rg_;
+   XrdOssCsiRangeGuard rg_;
    uint64_t pgOpts_;
 
    virtual void doneRead() /* override */
@@ -167,7 +167,7 @@ public:
    {
       rg_.ReleaseAll();
       parentaio_ = NULL;
-      XrdOssIntegrityFile *f = file_;
+      XrdOssCsiFile *f = file_;
       file_ = NULL;
       if (store_)
       {
@@ -185,7 +185,7 @@ public:
       }
    }
   
-   void Init(XrdSfsAio *aiop, XrdOssIntegrityFile *file, bool isPgOp, uint64_t opts, bool isread)
+   void Init(XrdSfsAio *aiop, XrdOssCsiFile *file, bool isPgOp, uint64_t opts, bool isread)
    {
       parentaio_               = aiop;
       this->sfsAio.aio_fildes  = aiop->sfsAio.aio_fildes;
@@ -198,20 +198,20 @@ public:
       file_                    = file;
       isPgOp_                  = isPgOp;
       pgOpts_                  = opts;
-      Sched_                   = XrdOssIntegrity::Sched_;
+      Sched_                   = XrdOssCsi::Sched_;
       job_.Init(file, this, aiop, isPgOp, isread);
       file_->aioInc();
    }
 
-   static XrdOssIntegrityFileAio *Alloc(XrdOssIntegrityFileAioStore *store)
+   static XrdOssCsiFileAio *Alloc(XrdOssCsiFileAioStore *store)
    {
-      XrdOssIntegrityFileAio *p=NULL;
+      XrdOssCsiFileAio *p=NULL;
       if (store)
       {
          std::lock_guard<std::mutex> guard(store->mtx_);
          if ((p = store->list_)) store->list_ = p->next_;
       }
-      if (!p) p = new XrdOssIntegrityFileAio(store);
+      if (!p) p = new XrdOssCsiFileAio(store);
       return p;
    }
 
@@ -226,20 +226,20 @@ public:
       Sched_->Schedule((XrdJob *)&job_);
    }
 
-   XrdOssIntegrityFileAio(XrdOssIntegrityFileAioStore *store) : store_(store) { }
-   ~XrdOssIntegrityFileAio() { }
+   XrdOssCsiFileAio(XrdOssCsiFileAioStore *store) : store_(store) { }
+   ~XrdOssCsiFileAio() { }
 
 private:
-   XrdOssIntegrityFileAioStore *store_;
+   XrdOssCsiFileAioStore *store_;
    XrdSfsAio *parentaio_;
-   XrdOssIntegrityFile *file_;
+   XrdOssCsiFile *file_;
    bool isPgOp_;
-   XrdOssIntegrityFileAioJob job_;
+   XrdOssCsiFileAioJob job_;
    XrdScheduler *Sched_;
-   XrdOssIntegrityFileAio *next_;
+   XrdOssCsiFileAio *next_;
 };
 
-void XrdOssIntegrityFileAioJob::DoItRead()
+void XrdOssCsiFileAioJob::DoItRead()
 {
    // this job runs after async Read
    // range was already locked read-only before the read
@@ -274,7 +274,7 @@ void XrdOssIntegrityFileAioJob::DoItRead()
    nio_->Recycle();
 }
 
-void XrdOssIntegrityFileAioJob::DoItWrite()
+void XrdOssCsiFileAioJob::DoItWrite()
 {
    // this job runs before async Write
 

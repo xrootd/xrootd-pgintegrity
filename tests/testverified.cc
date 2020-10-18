@@ -47,11 +47,11 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#define TMPFN "/tmp/xrdossintegrity_testfile_verified"
+#define TMPFN "/tmp/xrdosscsi_testfile_verified"
 
 namespace integrationTests {
 
-class ossintegrity_verifiedTest : public ::testing::Test {
+class osscsi_verifiedTest : public ::testing::Test {
 protected:
 
   virtual void SetUp() {
@@ -91,17 +91,17 @@ protected:
     std::string params = "";
     if (!allowmissing) params += "nomissing";
 
-    XrdSysLogger logger(m_fdnull,0);
+    m_logger = new XrdSysLogger(m_fdnull,0);
 
     XrdVERSIONINFODEF(v, "testint", XrdVNUMBER,XrdVERSION);
-    XrdOss *ossP = XrdOssDefaultSS(&logger, config_fn, v);
+    XrdOss *ossP = XrdOssDefaultSS(m_logger, config_fn, v);
 
     XrdOssAddStorageSystem2_t oss2P=NULL;
     oss2P = reinterpret_cast<XrdOssAddStorageSystem2_t>(dlsym(m_libp, "XrdOssAddStorageSystem2"));
 
     ASSERT_TRUE( oss2P != NULL );
 
-    m_oss = oss2P(ossP, &logger, config_fn, params.c_str(), &m_env);
+    m_oss = oss2P(ossP, m_logger, config_fn, params.c_str(), &m_env);
     ASSERT_TRUE(m_oss != NULL );
 
     m_file = m_oss->newFile("mytesttid");
@@ -113,8 +113,10 @@ protected:
     closefile();
     delete m_file;
     delete m_oss;
+    delete m_logger;
     m_file = NULL;
     m_oss = NULL;
+    m_logger = NULL;
   }
 
   int openfile(int oflags) {
@@ -134,6 +136,7 @@ protected:
   }
   
   int m_fdnull;
+  XrdSysLogger *m_logger;
   void *m_libp;
   XrdOucEnv m_env;
   XrdOss *m_oss;
@@ -143,7 +146,7 @@ protected:
   int fileFlags_;
 };
 
-TEST_F(ossintegrity_verifiedTest,verified) {
+TEST_F(osscsi_verifiedTest,verified) {
   uint32_t csvec[2];
   XrdOucCRC::Calc32C((void *)m_b, 8192, csvec);
   ssize_t ret = m_file->pgWrite(m_b, 0, 8192, csvec, XrdOssDF::Verify);
@@ -154,7 +157,7 @@ TEST_F(ossintegrity_verifiedTest,verified) {
   ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVer);
 }
 
-TEST_F(ossintegrity_verifiedTest,unverified) {
+TEST_F(osscsi_verifiedTest,unverified) {
   ssize_t ret = m_file->pgWrite(m_b, 0, 8192, NULL, 0);
   ASSERT_TRUE(ret == 8192);
   struct stat sbuff;
@@ -163,7 +166,7 @@ TEST_F(ossintegrity_verifiedTest,unverified) {
   ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVun);
 }
 
-TEST_F(ossintegrity_verifiedTest,unverified2) {
+TEST_F(osscsi_verifiedTest,unverified2) {
   ssize_t ret = m_file->Write(m_b, 0, 8192);
   ASSERT_TRUE(ret == 8192);
   struct stat sbuff;
@@ -172,7 +175,7 @@ TEST_F(ossintegrity_verifiedTest,unverified2) {
   ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVun);
 }
 
-TEST_F(ossintegrity_verifiedTest,downgrade) {
+TEST_F(osscsi_verifiedTest,downgrade) {
   uint32_t csvec[2];
   XrdOucCRC::Calc32C((void *)m_b, 8192, csvec);
   ssize_t ret = m_file->pgWrite(m_b, 0, 8192, csvec, XrdOssDF::Verify);
@@ -194,7 +197,7 @@ TEST_F(ossintegrity_verifiedTest,downgrade) {
   ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVun);
 }
 
-TEST_F(ossintegrity_verifiedTest,downgrade2) {
+TEST_F(osscsi_verifiedTest,downgrade2) {
   uint32_t csvec[2];
   XrdOucCRC::Calc32C((void *)m_b, 8192, csvec);
   ssize_t ret = m_file->pgWrite(m_b, 0, 8192, csvec, XrdOssDF::Verify);
@@ -216,7 +219,7 @@ TEST_F(ossintegrity_verifiedTest,downgrade2) {
   ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVun);
 }
 
-TEST_F(ossintegrity_verifiedTest,downgrade3) {
+TEST_F(osscsi_verifiedTest,downgrade3) {
   uint32_t csvec[2],csvec2[2];
   XrdOucCRC::Calc32C((void *)m_b, 8192, csvec);
   ssize_t ret = m_file->pgWrite(m_b, 0, 8192, csvec, XrdOssDF::Verify);
@@ -234,7 +237,7 @@ TEST_F(ossintegrity_verifiedTest,downgrade3) {
   ASSERT_TRUE(memcmp(csvec, csvec2, 8)==0);
 }
 
-TEST_F(ossintegrity_verifiedTest,nochecksums) {
+TEST_F(osscsi_verifiedTest,nochecksums) {
   uint32_t csvec[2],csvec2[2];
   uint8_t buf[8192];
   XrdOucCRC::Calc32C((void *)m_b, 8192, csvec);
@@ -255,7 +258,7 @@ TEST_F(ossintegrity_verifiedTest,nochecksums) {
   ASSERT_TRUE(sbuff.st_rdev == 0);
 }
 
-TEST_F(ossintegrity_verifiedTest,nochecksumsnomissing) {
+TEST_F(osscsi_verifiedTest,nochecksumsnomissing) {
   uint32_t csvec[2],csvec2[2];
   uint8_t buf[8192];
   XrdOucCRC::Calc32C((void *)m_b, 8192, csvec);

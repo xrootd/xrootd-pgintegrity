@@ -52,17 +52,17 @@
 #include <limits.h>
 #include <assert.h>
 
-extern XrdSysError  OssIntegrityEroute;
-extern XrdOucTrace  OssIntegrityTrace;
+extern XrdSysError  OssCsiEroute;
+extern XrdOucTrace  OssCsiTrace;
 
 // storage for class members
-XrdSysMutex XrdOssIntegrityFile::pumtx_;
-std::unordered_map<std::string, std::shared_ptr<XrdOssIntegrityFile::puMapItem_t> > XrdOssIntegrityFile::pumap_;
+XrdSysMutex XrdOssCsiFile::pumtx_;
+std::unordered_map<std::string, std::shared_ptr<XrdOssCsiFile::puMapItem_t> > XrdOssCsiFile::pumap_;
 
 //
 // If no others hold a pointer to Pages object, close it and remoe the pagemap info object.
 //
-int XrdOssIntegrityFile::pageMapClose()
+int XrdOssCsiFile::pageMapClose()
 {
    if (!pmi_) return -EBADF;
    bool doclose = false;
@@ -86,7 +86,7 @@ int XrdOssIntegrityFile::pageMapClose()
    return cpret;
 }
 
-void XrdOssIntegrityFile::mapTake(const std::string &key, std::shared_ptr<puMapItem_t> &pmi, const bool create)
+void XrdOssCsiFile::mapTake(const std::string &key, std::shared_ptr<puMapItem_t> &pmi, const bool create)
 {
    XrdSysMutexHelper lck(pumtx_);
    auto mapidx = pumap_.find(key);
@@ -104,7 +104,7 @@ void XrdOssIntegrityFile::mapTake(const std::string &key, std::shared_ptr<puMapI
    pmi->busy++;
 }
 
-int XrdOssIntegrityFile::mapReleaseLocked(std::shared_ptr<puMapItem_t> &pmi, XrdSysMutexHelper *plck)
+int XrdOssCsiFile::mapReleaseLocked(std::shared_ptr<puMapItem_t> &pmi, XrdSysMutexHelper *plck)
 {
    pmi->busy--;
    XrdSysMutexHelper lck(pumtx_);
@@ -122,7 +122,7 @@ int XrdOssIntegrityFile::mapReleaseLocked(std::shared_ptr<puMapItem_t> &pmi, Xrd
    return 0;
 }
 
-int XrdOssIntegrityFile::pageAndFileOpen(const char *fn, const int dflags, const int Oflag, const mode_t Mode, XrdOucEnv &Env)
+int XrdOssCsiFile::pageAndFileOpen(const char *fn, const int dflags, const int Oflag, const mode_t Mode, XrdOucEnv &Env)
 {
    if (pmi_) return -EBADF;
 
@@ -179,7 +179,7 @@ int XrdOssIntegrityFile::pageAndFileOpen(const char *fn, const int dflags, const
    return (dataret != XrdOssOK) ? dataret : pageret;
 }
 
-XrdOssIntegrityFile::~XrdOssIntegrityFile()
+XrdOssCsiFile::~XrdOssCsiFile()
 {
    if (pmi_)
    {
@@ -187,7 +187,7 @@ XrdOssIntegrityFile::~XrdOssIntegrityFile()
    }
 }
 
-int XrdOssIntegrityFile::Close(long long *retsz)
+int XrdOssCsiFile::Close(long long *retsz)
 {
    if (!pmi_)
    {
@@ -204,14 +204,14 @@ int XrdOssIntegrityFile::Close(long long *retsz)
    return csret;
 }
 
-int XrdOssIntegrityFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
+int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
 {
    XrdOucEnv newEnv;
    newEnv.Put("oss.cgroup", config_.xrdtSpaceName().c_str());
 
    char *tmp;
    long long cgSize=0;
-   if ((tmp = Env.Get("oss.asize")) && XrdOuca2x::a2sz(OssIntegrityEroute,"invalid asize",tmp,&cgSize,0))
+   if ((tmp = Env.Get("oss.asize")) && XrdOuca2x::a2sz(OssCsiEroute,"invalid asize",tmp,&cgSize,0))
    {
       cgSize=0;
    }
@@ -257,8 +257,8 @@ int XrdOssIntegrityFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    }
 
    std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident_));
-   std::unique_ptr<XrdOssIntegrityTagstore> ts(new XrdOssIntegrityTagstoreFile(pmi_->dpath, std::move(integFile), tident_));
-   std::unique_ptr<XrdOssIntegrityPages> pages(new XrdOssIntegrityPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), tident_));
+   std::unique_ptr<XrdOssCsiTagstore> ts(new XrdOssCsiTagstoreFile(pmi_->dpath, std::move(integFile), tident_));
+   std::unique_ptr<XrdOssCsiPages> pages(new XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), tident_));
 
    int puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, tagFlags, newEnv);
    if (puret<0)
@@ -279,7 +279,7 @@ int XrdOssIntegrityFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    return XrdOssOK;
 }
 
-int XrdOssIntegrityFile::Open(const char *path, const int Oflag, const mode_t Mode, XrdOucEnv &Env)
+int XrdOssCsiFile::Open(const char *path, const int Oflag, const mode_t Mode, XrdOucEnv &Env)
 {
    char cxid[4];
 
@@ -293,7 +293,7 @@ int XrdOssIntegrityFile::Open(const char *path, const int Oflag, const mode_t Mo
    {
       return -EINVAL;
    }
-   if (XrdOssIntegrity::isTagFile(path))
+   if (XrdOssCsi::isTagFile(path))
    {
       if ((Oflag & O_CREAT)) return -EPERM;
       return -ENOENT;
@@ -333,16 +333,16 @@ int XrdOssIntegrityFile::Open(const char *path, const int Oflag, const mode_t Mo
    return XrdOssOK;
 }
 
-ssize_t XrdOssIntegrityFile::Read(off_t offset, size_t blen)
+ssize_t XrdOssCsiFile::Read(off_t offset, size_t blen)
 {
    return successor_->Read(offset, blen);
 }
 
-ssize_t XrdOssIntegrityFile::Read(void *buff, off_t offset, size_t blen)
+ssize_t XrdOssCsiFile::Read(void *buff, off_t offset, size_t blen)
 {
    if (!pmi_) return -EBADF;
 
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, offset, offset+blen, true);
 
    const ssize_t bread = successor_->Read(buff, offset, blen);
@@ -357,11 +357,11 @@ ssize_t XrdOssIntegrityFile::Read(void *buff, off_t offset, size_t blen)
    return bread;
 }
 
-ssize_t XrdOssIntegrityFile::ReadRaw(void *buff, off_t offset, size_t blen)
+ssize_t XrdOssCsiFile::ReadRaw(void *buff, off_t offset, size_t blen)
 {
    if (!pmi_) return -EBADF;
 
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, offset, offset+blen, true);
 
    const ssize_t bread = successor_->ReadRaw(buff, offset, blen);
@@ -376,12 +376,12 @@ ssize_t XrdOssIntegrityFile::ReadRaw(void *buff, off_t offset, size_t blen)
    return bread;
 }
 
-ssize_t XrdOssIntegrityFile::ReadV(XrdOucIOVec *readV, int n)
+ssize_t XrdOssCsiFile::ReadV(XrdOucIOVec *readV, int n)
 {
    if (!pmi_) return -EBADF;
    if (n==0) return 0;
 
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    off_t start = readV[0].offset;
    off_t end = start + (off_t)readV[0].size;
    for(int i=1; i<n; i++)
@@ -409,12 +409,12 @@ ssize_t XrdOssIntegrityFile::ReadV(XrdOucIOVec *readV, int n)
    return rret;
 }
 
-ssize_t XrdOssIntegrityFile::Write(const void *buff, off_t offset, size_t blen)
+ssize_t XrdOssCsiFile::Write(const void *buff, off_t offset, size_t blen)
 {
    if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
 
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, offset, offset+blen, false);
 
    int puret = Pages()->UpdateRange(successor_, buff, offset, blen, rg);
@@ -442,13 +442,13 @@ ssize_t XrdOssIntegrityFile::Write(const void *buff, off_t offset, size_t blen)
    return bwritten;
 }
 
-ssize_t XrdOssIntegrityFile::WriteV(XrdOucIOVec *writeV, int n)
+ssize_t XrdOssCsiFile::WriteV(XrdOucIOVec *writeV, int n)
 {
    if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
    if (n==0) return 0;
 
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    off_t start = writeV[0].offset;
    off_t end = start + (off_t)writeV[0].size;
    for(int i=1; i<n; i++)
@@ -480,14 +480,14 @@ ssize_t XrdOssIntegrityFile::WriteV(XrdOucIOVec *writeV, int n)
    return ret;
 }
 
-ssize_t XrdOssIntegrityFile::pgRead(void *buffer, off_t offset, size_t rdlen, uint32_t *csvec, uint64_t opts)
+ssize_t XrdOssCsiFile::pgRead(void *buffer, off_t offset, size_t rdlen, uint32_t *csvec, uint64_t opts)
 {
    if (!pmi_) return -EBADF;
 
    // this is a tighter restriction that FetchRange requires
    if ((rdlen % XrdSys::PageSize) != 0) return -EINVAL;
 
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, offset, offset+rdlen, true);
 
    ssize_t toread = rdlen;
@@ -512,7 +512,7 @@ ssize_t XrdOssIntegrityFile::pgRead(void *buffer, off_t offset, size_t rdlen, ui
    return bread;
 }
 
-ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, uint32_t *csvec, uint64_t opts)
+ssize_t XrdOssCsiFile::pgWrite(void *buffer, off_t offset, size_t wrlen, uint32_t *csvec, uint64_t opts)
 {
    if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
@@ -528,7 +528,7 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
       }
    }
 
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, offset, offset+wrlen, false);
 
    int puret = Pages()->StoreRange(successor_, buffer, offset, wrlen, csvec, pgopts, rg);
@@ -555,7 +555,7 @@ ssize_t XrdOssIntegrityFile::pgWrite(void *buffer, off_t offset, size_t wrlen, u
    return bwritten;
 }
 
-int XrdOssIntegrityFile::Fsync()
+int XrdOssCsiFile::Fsync()
 {
    if (!pmi_) return -EBADF;
 
@@ -565,12 +565,12 @@ int XrdOssIntegrityFile::Fsync()
    return ssret;
 }
 
-int XrdOssIntegrityFile::Ftruncate(unsigned long long flen)
+int XrdOssCsiFile::Ftruncate(unsigned long long flen)
 {
    if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
 
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, flen, LLONG_MAX, false);
    int ret = Pages()->truncate(successor_, flen, rg);
    if (ret<0)
@@ -588,10 +588,10 @@ int XrdOssIntegrityFile::Ftruncate(unsigned long long flen)
    return ret;
 }
 
-int XrdOssIntegrityFile::Fstat(struct stat *buff)
+int XrdOssCsiFile::Fstat(struct stat *buff)
 {
    if (!pmi_) return -EBADF;
-   XrdOssIntegrityPages::Sizes_t sizes;
+   XrdOssCsiPages::Sizes_t sizes;
    const int tsret = Pages()->TrackedSizesGet(sizes, false);
    const int fsret = successor_->Fstat(buff);
    if (fsret<0) return fsret;
@@ -600,9 +600,9 @@ int XrdOssIntegrityFile::Fstat(struct stat *buff)
    return 0;
 }
 
-int XrdOssIntegrityFile::resyncSizes()
+int XrdOssCsiFile::resyncSizes()
 {
-   XrdOssIntegrityRangeGuard rg;
+   XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, 0, LLONG_MAX, false);
    struct stat sbuff;
    int ret = successor_->Fstat(&sbuff);
@@ -611,7 +611,7 @@ int XrdOssIntegrityFile::resyncSizes()
    return 0;
 }
 
-void XrdOssIntegrityFile::Flush()
+void XrdOssCsiFile::Flush()
 {
    if (!pmi_) return;
 
@@ -619,7 +619,7 @@ void XrdOssIntegrityFile::Flush()
    successor_->Flush();
 }
 
-int XrdOssIntegrityFile::VerificationStatus()
+int XrdOssCsiFile::VerificationStatus()
 {
    if (!pmi_) return 0;
    return Pages()->VerificationStatus();

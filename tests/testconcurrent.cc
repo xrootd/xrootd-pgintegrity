@@ -47,11 +47,11 @@
 #include <cstdint>
 #include <stdlib.h>
 
-#define TMPFN "/tmp/xrdossintegrity_testfile_concurrent"
+#define TMPFN "/tmp/xrdosscsi_testfile_concurrent"
 
 namespace integrationTests {
 
-class ossintegrity_pageConcurrent : public ::testing::Test {
+class osscsi_pageConcurrent : public ::testing::Test {
 
 public:
   void thread(int idx, int *thrret) {
@@ -106,10 +106,10 @@ protected:
     ASSERT_TRUE(m_fdnull >= 0);
 
     const char *config_fn = NULL;
-    XrdSysLogger logger(m_fdnull,0);
+    m_logger = new XrdSysLogger(m_fdnull,0);
 
     XrdVERSIONINFODEF(v, "testint", XrdVNUMBER,XrdVERSION);
-    XrdOss *ossP = XrdOssDefaultSS(&logger, config_fn, v);
+    XrdOss *ossP = XrdOssDefaultSS(m_logger, config_fn, v);
 
     m_libp = dlopen("libXrdOssIntegrity-5.so",RTLD_NOW|RTLD_GLOBAL);
     ASSERT_TRUE( m_libp != NULL );
@@ -119,7 +119,7 @@ protected:
 
     ASSERT_TRUE( oss2P != NULL );
 
-    m_oss = oss2P(ossP, &logger, config_fn, "", &m_env);
+    m_oss = oss2P(ossP, m_logger, config_fn, "", &m_env);
     ASSERT_TRUE(m_oss != NULL );
 
     m_file = m_oss->newFile("mytesttid");
@@ -146,6 +146,8 @@ protected:
     m_oss = NULL;
     dlclose(m_libp);
     m_libp = NULL;
+    delete m_logger;
+    m_logger = NULL;
     close(m_fdnull);
     m_fdnull = -1;
   }
@@ -165,6 +167,7 @@ protected:
   }
 
   int m_fdnull;
+  XrdSysLogger *m_logger;
   void *m_libp;
   XrdOucEnv m_env;
   XrdOss *m_oss;
@@ -174,7 +177,7 @@ protected:
   const static int NTHR = 16;
 };
 
-TEST_F(ossintegrity_pageConcurrent,concurrent) {
+TEST_F(osscsi_pageConcurrent,concurrent) {
   ASSERT_TRUE((m_oss->Features() & XRDOSS_HASFSCS) != 0);
 
   closefile();
@@ -182,7 +185,7 @@ TEST_F(ossintegrity_pageConcurrent,concurrent) {
   std::vector<std::thread> thr;
   std::vector<int> res(NTHR);
   for(int i=0;i<NTHR;i++) {
-    thr.emplace_back(&ossintegrity_pageConcurrent::thread, this, i, &res[i]);
+    thr.emplace_back(&osscsi_pageConcurrent::thread, this, i, &res[i]);
   }
   for(int i=0;i<NTHR;i++) {
     thr[i].join();

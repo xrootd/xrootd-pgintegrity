@@ -1,5 +1,5 @@
-#ifndef _XRDOSSINTEGRITYPAGES_H
-#define _XRDOSSINTEGRITYPAGES_H
+#ifndef _XRDOSSCSIPAGES_H
+#define _XRDOSSCSIPAGES_H
 /******************************************************************************/
 /*                                                                            */
 /*              X r d O s s I n t e g r i t y P a g e s . h h                 */
@@ -39,28 +39,28 @@
 #include <mutex>
 #include <utility>
 
-class XrdOssIntegrityPages
+class XrdOssCsiPages
 {
 public:
    typedef std::pair<off_t,off_t> Sizes_t;
 
-   XrdOssIntegrityPages(const std::string &fn, std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh, bool am, const std::string &);
-   ~XrdOssIntegrityPages() { (void)Close(); }
+   XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, const std::string &);
+   ~XrdOssCsiPages() { (void)Close(); }
 
    int Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP);
    int Close();
 
-   int UpdateRange(XrdOssDF *, const void *, off_t, size_t, XrdOssIntegrityRangeGuard&);
-   ssize_t VerifyRange(XrdOssDF *, const void *, off_t, size_t, XrdOssIntegrityRangeGuard&);
+   int UpdateRange(XrdOssDF *, const void *, off_t, size_t, XrdOssCsiRangeGuard&);
+   ssize_t VerifyRange(XrdOssDF *, const void *, off_t, size_t, XrdOssCsiRangeGuard&);
    void Flush();
    int Fsync();
 
-   ssize_t FetchRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssIntegrityRangeGuard&);
-   int StoreRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssIntegrityRangeGuard&);
-   void LockTrackinglen(XrdOssIntegrityRangeGuard &, off_t, off_t, bool);
+   ssize_t FetchRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssCsiRangeGuard&);
+   int StoreRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssCsiRangeGuard&);
+   void LockTrackinglen(XrdOssCsiRangeGuard &, off_t, off_t, bool);
 
    bool IsReadOnly() const { return rdonly_; }
-   int truncate(XrdOssDF *, off_t, XrdOssIntegrityRangeGuard&);
+   int truncate(XrdOssDF *, off_t, XrdOssCsiRangeGuard&);
    int TrackedSizesGet(Sizes_t &, bool);
    int LockResetSizes(off_t);
    void TrackedSizeRelease();
@@ -68,9 +68,9 @@ public:
 
 protected:
    ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, uint32_t *, bool, bool, uint32_t, uint32_t);
-   std::unique_ptr<XrdOssIntegrityTagstore> ts_;
+   std::unique_ptr<XrdOssCsiTagstore> ts_;
    XrdSysMutex rangeaddmtx_;
-   XrdOssIntegrityRanges ranges_;
+   XrdOssCsiRanges ranges_;
    bool writeHoles_;
    bool allowMissingTags_;
    bool hasMissingTags_;

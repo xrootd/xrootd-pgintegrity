@@ -1,5 +1,5 @@
-#ifndef _XRDOSSINTEGRITYTAGSTOREFILE_H
-#define _XRDOSSINTEGRITYTAGSTOREFILE_H
+#ifndef _XRDOSSCSITAGSTOREFILE_H
+#define _XRDOSSCSITAGSTOREFILE_H
 /******************************************************************************/
 /*                                                                            */
 /*        X r d O s s I n t e g r i t y T a g s t o r e F i l e . h h         */
@@ -39,11 +39,11 @@
 #include <mutex>
 #include <byteswap.h>
 
-class XrdOssIntegrityTagstoreFile : public XrdOssIntegrityTagstore
+class XrdOssCsiTagstoreFile : public XrdOssCsiTagstore
 {
 public:
-   XrdOssIntegrityTagstoreFile(const std::string &fn, std::unique_ptr<XrdOssDF> fd, const std::string &tid) : fn_(fn), fd_(std::move(fd)), trackinglen_(0), isOpen(false), tident_(tid) { }
-   virtual ~XrdOssIntegrityTagstoreFile() { if (isOpen) { (void)Close(); } }
+   XrdOssCsiTagstoreFile(const std::string &fn, std::unique_ptr<XrdOssDF> fd, const std::string &tid) : fn_(fn), fd_(std::move(fd)), trackinglen_(0), isOpen(false), tident_(tid) { }
+   virtual ~XrdOssCsiTagstoreFile() { if (isOpen) { (void)Close(); } }
 
    virtual int Open(const char *, off_t, int, XrdOucEnv &) /* override */;
    virtual int Close() /* override */;
@@ -88,16 +88,16 @@ public:
    virtual bool IsVerified() const /* override */
    {
       if (!isOpen) return false;
-     if ((hflags_ & XrdOssIntegrityTagstore::csVer)) return true;
+     if ((hflags_ & XrdOssCsiTagstore::csVer)) return true;
      return false;
    }
 
    virtual int SetUnverified()
    {
       if (!isOpen) return -EBADF;
-     if ((hflags_ & XrdOssIntegrityTagstore::csVer))
+     if ((hflags_ & XrdOssCsiTagstore::csVer))
      {
-       hflags_ &= ~XrdOssIntegrityTagstore::csVer;
+       hflags_ &= ~XrdOssCsiTagstore::csVer;
        return MarshallAndWriteHeader();
      }
      return 0;

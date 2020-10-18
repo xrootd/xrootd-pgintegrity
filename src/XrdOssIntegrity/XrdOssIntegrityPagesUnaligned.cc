@@ -36,9 +36,9 @@
 
 #include <vector>
 
-extern XrdOucTrace  OssIntegrityTrace;
+extern XrdOucTrace  OssCsiTrace;
 
-int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, const Sizes_t &sizes)
+int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, const Sizes_t &sizes)
 {
    EPNAME("UpdateRangeHoleUntilPage");
 
@@ -61,7 +61,7 @@ int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t unt
          return -EIO;
       }
       uint8_t b[XrdSys::PageSize];
-      ssize_t rret = XrdOssIntegrityPages::maxread(fd, b, tracked_page*XrdSys::PageSize, XrdSys::PageSize);
+      ssize_t rret = XrdOssCsiPages::maxread(fd, b, tracked_page*XrdSys::PageSize, XrdSys::PageSize);
       if (rret < 0) return rret;
       if (static_cast<size_t>(rret) < tracked_off)
       {
@@ -107,7 +107,7 @@ int XrdOssIntegrityPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t unt
    return 0;
 }
 
-int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
+int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
    EPNAME("UpdateRangeUnaligned");
    const off_t p1 = offset / XrdSys::PageSize;
@@ -166,7 +166,7 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
          const size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
          if (toread>0)
          {
-            ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
+            ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
             if (rret<0)
             {
                TRACE(Warn, "Read error from " << fn_ << " result " << rret);
@@ -226,7 +226,7 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
    uint8_t b[XrdSys::PageSize];
    if (toread>0)
    {
-      ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize * p2, toread);
+      ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p2, toread);
       if (rret<0)
       {
          TRACE(Warn, "Read error from " << fn_ << " result " << rret);
@@ -252,7 +252,7 @@ int XrdOssIntegrityPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *b
    return 0;
 }
 
-ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
+ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
    EPNAME("VerifyRangeUnaligned");
 
@@ -278,7 +278,7 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
    {
       const size_t bavail = std::min(trackinglen - (XrdSys::PageSize*p1), (off_t)XrdSys::PageSize);
       uint8_t b[XrdSys::PageSize];
-      rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize*p1, bavail);
+      rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p1, bavail);
       if (rret<0) return rret;
       const size_t bcommon = std::min(bavail - p1_off, blen);
       if (memcmp(buff, &b[p1_off], bcommon))
@@ -345,7 +345,7 @@ ssize_t XrdOssIntegrityPages::VerifyRangeUnaligned(XrdOssDF *const fd, const voi
    {
       const size_t bavail = std::min(trackinglen - (XrdSys::PageSize*p2), (off_t)XrdSys::PageSize);
       uint8_t b[XrdSys::PageSize];
-      ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, XrdSys::PageSize*p2, bavail);
+      ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p2, bavail);
       if (rret<0) return rret;
       const uint8_t *const p = (uint8_t*)buff;
       if (memcmp(&p[blen-p2_off], b, p2_off))

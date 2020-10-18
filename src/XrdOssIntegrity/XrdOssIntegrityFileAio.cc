@@ -44,11 +44,11 @@
 #include <fcntl.h>
 #include <limits.h>
 
-extern XrdOucTrace  OssIntegrityTrace;
+extern XrdOucTrace  OssCsiTrace;
 
-XrdOssIntegrityFileAioStore::~XrdOssIntegrityFileAioStore()
+XrdOssCsiFileAioStore::~XrdOssCsiFileAioStore()
 {
-   XrdOssIntegrityFileAio *p;
+   XrdOssCsiFileAio *p;
    while((p=list_))
    {
       list_ = list_->next_;
@@ -56,43 +56,43 @@ XrdOssIntegrityFileAioStore::~XrdOssIntegrityFileAioStore()
    }
 }
 
-int XrdOssIntegrityFile::Read(XrdSfsAio *aiop)
+int XrdOssCsiFile::Read(XrdSfsAio *aiop)
 {
    if (!pmi_) return -EBADF;
 
-   XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
+   XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aiop, this, false, 0, true);
    pmi_->pages->LockTrackinglen(nio->rg_, (off_t)aiop->sfsAio.aio_offset,
                                      (off_t)(aiop->sfsAio.aio_offset+aiop->sfsAio.aio_nbytes), true);
    return successor_->Read(nio);
 }
 
-int XrdOssIntegrityFile::Write(XrdSfsAio *aiop)
+int XrdOssCsiFile::Write(XrdSfsAio *aiop)
 {
    if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
 
-   XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
+   XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aiop, this, false, 0, false);
    // pages will be locked when write is scheduled
    return nio->SchedWriteJob();
 }
 
-int XrdOssIntegrityFile::pgRead (XrdSfsAio *aioparm, uint64_t opts)
+int XrdOssCsiFile::pgRead (XrdSfsAio *aioparm, uint64_t opts)
 {
    if (!pmi_) return -EBADF;
 
    // this is a tighter restriction that FetchRange requires
    if ((aioparm->sfsAio.aio_nbytes % XrdSys::PageSize) !=0) return -EINVAL;
 
-   XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
+   XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, opts, true);
    pmi_->pages->LockTrackinglen(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
                                      (off_t)(aioparm->sfsAio.aio_offset+aioparm->sfsAio.aio_nbytes), true);
    return successor_->Read(nio);
 }
 
-int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
+int XrdOssCsiFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
 {
    if (!pmi_) return -EBADF;
    if (rdonly_) return -EBADF;
@@ -108,13 +108,13 @@ int XrdOssIntegrityFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
       }
    }
 
-   XrdOssIntegrityFileAio *nio = XrdOssIntegrityFileAio::Alloc(&aiostore_);
+   XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, pgopts, false);
    // pages will be locked when write is scheduled
    return nio->SchedWriteJob();
 }
 
-int XrdOssIntegrityFile::Fsync(XrdSfsAio *aiop)
+int XrdOssCsiFile::Fsync(XrdSfsAio *aiop)
 {
    aiop->Result = this->Fsync();
    aiop->doneWrite();

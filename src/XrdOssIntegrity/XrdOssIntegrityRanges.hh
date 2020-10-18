@@ -1,5 +1,5 @@
-#ifndef _XRDOSSINTEGRITYRANGES_H
-#define _XRDOSSINTEGRITYRANGES_H
+#ifndef _XRDOSSCSIRANGES_H
+#define _XRDOSSCSIRANGES_H
 /******************************************************************************/
 /*                                                                            */
 /*            X r d O s s I n t e g r i t y R a n g e s . h h                 */
@@ -39,9 +39,9 @@
 #include <memory>
 
 // forward decl
-class XrdOssIntegrityPages;
+class XrdOssCsiPages;
 
-struct XrdOssIntegrityRange_s
+struct XrdOssCsiRange_s
 {
    off_t start;
    off_t end;
@@ -49,18 +49,18 @@ struct XrdOssIntegrityRange_s
    int nBlockedBy;
    std::mutex mtx;
    std::condition_variable cv;
-   XrdOssIntegrityRange_s *next;
+   XrdOssCsiRange_s *next;
 };
 
-class XrdOssIntegrityRanges;
+class XrdOssCsiRanges;
 
-class XrdOssIntegrityRangeGuard
+class XrdOssCsiRangeGuard
 {
 public:
-   XrdOssIntegrityRangeGuard() : r_(NULL), rp_(NULL), pages_(NULL), trackinglenlocked_(false) { }
-   ~XrdOssIntegrityRangeGuard();
+   XrdOssCsiRangeGuard() : r_(NULL), rp_(NULL), pages_(NULL), trackinglenlocked_(false) { }
+   ~XrdOssCsiRangeGuard();
 
-   void SetRange(XrdOssIntegrityRanges *r, XrdOssIntegrityRange_s *rp)
+   void SetRange(XrdOssCsiRanges *r, XrdOssCsiRange_s *rp)
    {
       r_ = r;
       rp_ = rp;
@@ -73,7 +73,7 @@ public:
       return trackingsizes_;
    }
 
-   void SetTrackingInfo(XrdOssIntegrityPages *p, const std::pair<off_t,off_t> &tsizes, bool locked)
+   void SetTrackingInfo(XrdOssCsiPages *p, const std::pair<off_t,off_t> &tsizes, bool locked)
    {
       trackingsizes_ = tsizes;
       if (locked)
@@ -89,22 +89,22 @@ public:
    void ReleaseAll();
 
 private:
-   XrdOssIntegrityRanges *r_;
-   XrdOssIntegrityRange_s *rp_;
-   XrdOssIntegrityPages *pages_;
+   XrdOssCsiRanges *r_;
+   XrdOssCsiRange_s *rp_;
+   XrdOssCsiPages *pages_;
    std::pair<off_t,off_t> trackingsizes_;
    bool trackinglenlocked_;
 };
 
 
-class XrdOssIntegrityRanges
+class XrdOssCsiRanges
 {
 public:
-   XrdOssIntegrityRanges() : allocList_(NULL) { }
+   XrdOssCsiRanges() : allocList_(NULL) { }
 
-   ~XrdOssIntegrityRanges()
+   ~XrdOssCsiRanges()
    {
-      XrdOssIntegrityRange_s *p;
+      XrdOssCsiRange_s *p;
       while((p = allocList_))
       {
          allocList_ = allocList_->next;
@@ -115,7 +115,7 @@ public:
    //
    // AddRange: add an inclusive range lock on pages [start, end]
    //
-   void AddRange(const off_t start, const off_t end, XrdOssIntegrityRangeGuard &rg, bool rdonly)
+   void AddRange(const off_t start, const off_t end, XrdOssCsiRangeGuard &rg, bool rdonly)
    {
       std::unique_lock<std::mutex> lck(rmtx_);
     
@@ -131,7 +131,7 @@ public:
          }
       }
 
-      XrdOssIntegrityRange_s *nr = AllocRange();
+      XrdOssCsiRange_s *nr = AllocRange();
       nr->start = start;
       nr->end = end;
       nr->rdonly = rdonly;
@@ -142,7 +142,7 @@ public:
       rg.SetRange(this, nr);
    }
 
-   void Wait(XrdOssIntegrityRange_s *rp)
+   void Wait(XrdOssCsiRange_s *rp)
    {
       std::unique_lock<std::mutex> l(rp->mtx);
       while (rp->nBlockedBy>0)
@@ -151,7 +151,7 @@ public:
       }
    }
 
-   void RemoveRange(XrdOssIntegrityRange_s *rp)
+   void RemoveRange(XrdOssCsiRange_s *rp)
    {
       std::lock_guard<std::mutex> guard(rmtx_);
       for(auto itr=ranges_.begin();itr!=ranges_.end();++itr)
@@ -185,21 +185,21 @@ public:
 
 private:
    std::mutex rmtx_;
-   std::list<XrdOssIntegrityRange_s *> ranges_;
-   XrdOssIntegrityRange_s *allocList_;
+   std::list<XrdOssCsiRange_s *> ranges_;
+   XrdOssCsiRange_s *allocList_;
 
    // must be called with rmtx_ locked
-   XrdOssIntegrityRange_s* AllocRange()
+   XrdOssCsiRange_s* AllocRange()
    {
-      XrdOssIntegrityRange_s *p;
+      XrdOssCsiRange_s *p;
       if ((p = allocList_)) allocList_ = p->next;
-      if (!p) p = new XrdOssIntegrityRange_s();
+      if (!p) p = new XrdOssCsiRange_s();
       p->next = NULL;
       return p;
    }
 
    // must be called with rmtx_ locked
-   void RecycleRange(XrdOssIntegrityRange_s* rp)
+   void RecycleRange(XrdOssCsiRange_s* rp)
    {
      rp->next = allocList_;
      allocList_ = rp;

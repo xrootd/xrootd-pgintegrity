@@ -40,9 +40,9 @@
 
 #include <assert.h>
 
-extern XrdOucTrace  OssIntegrityTrace;
+extern XrdOucTrace  OssCsiTrace;
 
-XrdOssIntegrityPages::XrdOssIntegrityPages(const std::string &fn, std::unique_ptr<XrdOssIntegrityTagstore> ts, bool wh, bool am, const std::string &tid) :
+XrdOssCsiPages::XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, const std::string &tid) :
         ts_(std::move(ts)),
         writeHoles_(wh),
         allowMissingTags_(am),
@@ -56,7 +56,7 @@ XrdOssIntegrityPages::XrdOssIntegrityPages(const std::string &fn, std::unique_pt
    // empty constructor
 }
 
-int XrdOssIntegrityPages::Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP)
+int XrdOssCsiPages::Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP)
 {
    EPNAME("Pages::Open");
    hasMissingTags_ = false;
@@ -78,7 +78,7 @@ int XrdOssIntegrityPages::Open(const char *path, off_t dsize, int flags, XrdOucE
    return 0;
 }
 
-int XrdOssIntegrityPages::Close()
+int XrdOssCsiPages::Close()
 {
    if (hasMissingTags_)
    {
@@ -88,18 +88,18 @@ int XrdOssIntegrityPages::Close()
    return ts_->Close();
 }
 
-void XrdOssIntegrityPages::Flush()
+void XrdOssCsiPages::Flush()
 {
    if (!hasMissingTags_) ts_->Flush();
 }
 
-int XrdOssIntegrityPages::Fsync()
+int XrdOssCsiPages::Fsync()
 {
    if (hasMissingTags_) return 0;
    return ts_->Fsync();
 }
 
-int XrdOssIntegrityPages::TrackedSizesGet(XrdOssIntegrityPages::Sizes_t &rsizes, const bool forupdate)
+int XrdOssCsiPages::TrackedSizesGet(XrdOssCsiPages::Sizes_t &rsizes, const bool forupdate)
 {
    if (hasMissingTags_) return -ENOENT;
 
@@ -118,13 +118,13 @@ int XrdOssIntegrityPages::TrackedSizesGet(XrdOssIntegrityPages::Sizes_t &rsizes,
    return 0;
 }
 
-int XrdOssIntegrityPages::LockSetTrackedSize(const off_t sz)
+int XrdOssCsiPages::LockSetTrackedSize(const off_t sz)
 {
    XrdSysCondVarHelper lck(&tscond_);
    return ts_->SetTrackedSize(sz);
 }
 
-int XrdOssIntegrityPages::LockResetSizes(const off_t sz)
+int XrdOssCsiPages::LockResetSizes(const off_t sz)
 {
    // nothing to do is no tag file
    if (hasMissingTags_) return 0;
@@ -133,19 +133,19 @@ int XrdOssIntegrityPages::LockResetSizes(const off_t sz)
    return ts_->ResetSizes(sz);
 }
 
-int XrdOssIntegrityPages::LockTruncateSize(const off_t sz, const bool datatoo)
+int XrdOssCsiPages::LockTruncateSize(const off_t sz, const bool datatoo)
 {
    XrdSysCondVarHelper lck(&tscond_);
    return ts_->Truncate(sz,datatoo);
 }
 
-int XrdOssIntegrityPages::LockMakeUnverified()
+int XrdOssCsiPages::LockMakeUnverified()
 {
    XrdSysCondVarHelper lck(&tscond_);
    return ts_->SetUnverified();
 }
 
-void XrdOssIntegrityPages::TrackedSizeRelease()
+void XrdOssCsiPages::TrackedSizeRelease()
 {
    XrdSysCondVarHelper lck(&tscond_);
    assert(tsforupdate_ == true);
@@ -154,7 +154,7 @@ void XrdOssIntegrityPages::TrackedSizeRelease()
    tscond_.Broadcast();
 }
 
-int XrdOssIntegrityPages::UpdateRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssIntegrityRangeGuard &rg)
+int XrdOssCsiPages::UpdateRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssCsiRangeGuard &rg)
 {
    if (offset<0)
    {
@@ -200,7 +200,7 @@ int XrdOssIntegrityPages::UpdateRange(XrdOssDF *const fd, const void *buff, cons
    return ret;
 }
 
-ssize_t XrdOssIntegrityPages::VerifyRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssIntegrityRangeGuard &rg)
+ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssCsiRangeGuard &rg)
 {
    EPNAME("VerifyRange");
 
@@ -251,7 +251,7 @@ ssize_t XrdOssIntegrityPages::VerifyRange(XrdOssDF *const fd, const void *buff, 
    return vret;
 }
 
-ssize_t XrdOssIntegrityPages::apply_sequential_aligned_modify(
+ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
    const void *const buff, const off_t startp, const size_t nbytes, uint32_t *csvec,
    const bool preblockset, const bool lastblockset, const uint32_t cspre, const uint32_t cslast)
 {
@@ -316,7 +316,7 @@ ssize_t XrdOssIntegrityPages::apply_sequential_aligned_modify(
    return nblkwritten;
 }
 
-ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *const csvec, const uint64_t opts)
+ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *const csvec, const uint64_t opts)
 {
    EPNAME("FetchRangeAligned");
    if (csvec == NULL && !(opts & XrdOssDF::Verify))
@@ -389,12 +389,12 @@ ssize_t XrdOssIntegrityPages::FetchRangeAligned(const void *const buff, const of
    return blen;
 }
 
-ssize_t XrdOssIntegrityPages::VerifyRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
+ssize_t XrdOssCsiPages::VerifyRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
    return FetchRangeAligned(buff,offset,blen,sizes,NULL,XrdOssDF::Verify);
 }
 
-int XrdOssIntegrityPages::StoreRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *csvec)
+int XrdOssCsiPages::StoreRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *csvec)
 {
    // if csvec given store those values
    // if no csvec then calculate against data and store
@@ -414,7 +414,7 @@ int XrdOssIntegrityPages::StoreRangeAligned(const void *const buff, const off_t 
    return 0;
 }
 
-int XrdOssIntegrityPages::UpdateRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
+int XrdOssCsiPages::UpdateRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
    return StoreRangeAligned(buff, offset, blen, sizes, NULL);
 }
@@ -428,7 +428,7 @@ int XrdOssIntegrityPages::UpdateRangeAligned(const void *const buff, const off_t
 // offend - end of range byte (excluding byte at end) of page at which to end lock
 // rdonly - will be a read-only operation
 //
-void XrdOssIntegrityPages::LockTrackinglen(XrdOssIntegrityRangeGuard &rg, const off_t offset, const off_t offend, const bool rdonly)
+void XrdOssCsiPages::LockTrackinglen(XrdOssCsiRangeGuard &rg, const off_t offset, const off_t offend, const bool rdonly)
 {
    // no need to lock if we don't have a tag file
    if (hasMissingTags_) return;
@@ -470,7 +470,7 @@ void XrdOssIntegrityPages::LockTrackinglen(XrdOssIntegrityRangeGuard &rg, const 
    rg.Wait();
 }
 
-int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIntegrityRangeGuard &rg)
+int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRangeGuard &rg)
 {
    EPNAME("truncate");
 
@@ -507,7 +507,7 @@ int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIn
       uint8_t b[XrdSys::PageSize];
       if (toread>0)
       {
-         ssize_t rret = XrdOssIntegrityPages::fullread(fd, b, p_until*XrdSys::PageSize, toread);
+         ssize_t rret = XrdOssCsiPages::fullread(fd, b, p_until*XrdSys::PageSize, toread);
          if (rret<0) return rret;
          const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
          uint32_t crc32v;
@@ -533,9 +533,9 @@ int XrdOssIntegrityPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssIn
    return 0;
 }
 
-ssize_t XrdOssIntegrityPages::FetchRange(
+ssize_t XrdOssCsiPages::FetchRange(
    XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen,
-   uint32_t *csvec, const uint64_t opts, XrdOssIntegrityRangeGuard &rg)
+   uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
 {
    EPNAME("FetchRange");
    if (offset<0)
@@ -585,7 +585,7 @@ ssize_t XrdOssIntegrityPages::FetchRange(
    return FetchRangeAligned(buff,offset,blen,sizes,csvec,opts);
 }
 
-int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssIntegrityRangeGuard &rg)
+int XrdOssCsiPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
 {
    if (offset<0)
    {
@@ -649,7 +649,7 @@ int XrdOssIntegrityPages::StoreRange(XrdOssDF *const fd, const void *buff, const
    return StoreRangeAligned(buff,offset,blen,sizes,csvec);
 }
 
-int XrdOssIntegrityPages::VerificationStatus()
+int XrdOssCsiPages::VerificationStatus()
 {
    if (hasMissingTags_)
    {

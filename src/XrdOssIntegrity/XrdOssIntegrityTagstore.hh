@@ -1,5 +1,5 @@
-#ifndef _XRDOSSINTEGRITYTAGSTORE_H
-#define _XRDOSSINTEGRITYTAGSTORE_H
+#ifndef _XRDOSSCSITAGSTORE_H
+#define _XRDOSSCSITAGSTORE_H
 /******************************************************************************/
 /*                                                                            */
 /*          X r d O s s I n t e g r i t y T a g s t o r e . h h               */
@@ -33,11 +33,11 @@
 
 #include "XrdOss/XrdOss.hh"
 
-class XrdOssIntegrityTagstore
+class XrdOssCsiTagstore
 {
 public:
 
-   virtual ~XrdOssIntegrityTagstore() { }
+   virtual ~XrdOssCsiTagstore() { }
 
    virtual int Open(const char *, off_t, int, XrdOucEnv &)=0;
    virtual int Close()=0;

@@ -44,30 +44,30 @@
 #include <limits.h>
 #include <assert.h>
 
-XrdVERSIONINFO(XrdOssAddStorageSystem2,XrdOssIntegrity)
+XrdVERSIONINFO(XrdOssAddStorageSystem2,XrdOssCsi)
 
-XrdSysError OssIntegrityEroute(0, "ossintegrity_");
-XrdOucTrace OssIntegrityTrace(&OssIntegrityEroute);
+XrdSysError OssCsiEroute(0, "osscsi_");
+XrdOucTrace OssCsiTrace(&OssCsiEroute);
 
-XrdScheduler *XrdOssIntegrity::Sched_;
+XrdScheduler *XrdOssCsi::Sched_;
 
 // skip tag files in directory listing
-int XrdOssIntegrityDir::Readdir(char *buff, int blen)
+int XrdOssCsiDir::Readdir(char *buff, int blen)
 {
    int ret;
    do
    {
       ret = successor_->Readdir(buff, blen);
       if (ret<0) return ret;
-   } while(XrdOssIntegrity::isTagFile(buff));
+   } while(XrdOssCsi::isTagFile(buff));
    return ret;
 }
 
-int XrdOssIntegrity::Init(XrdSysLogger *lP, const char *cP, const char *params, XrdOucEnv *env)
+int XrdOssCsi::Init(XrdSysLogger *lP, const char *cP, const char *params, XrdOucEnv *env)
 {
-   OssIntegrityEroute.logger(lP);
+   OssCsiEroute.logger(lP);
 
-   int cret = config_.Init(OssIntegrityEroute, cP, params, env);
+   int cret = config_.Init(OssCsiEroute, cP, params, env);
    if (cret != XrdOssOK)
    {
       return cret;
@@ -83,15 +83,15 @@ int XrdOssIntegrity::Init(XrdSysLogger *lP, const char *cP, const char *params, 
    return XrdOssOK;
 }
 
-int XrdOssIntegrity::Unlink(const char *path, int Opts, XrdOucEnv *eP)
+int XrdOssCsi::Unlink(const char *path, int Opts, XrdOucEnv *eP)
 {
    if (isTagFile(path)) return -ENOENT;
 
    // get mapinfo entries for file
-   std::shared_ptr<XrdOssIntegrityFile::puMapItem_t> pmi;
+   std::shared_ptr<XrdOssCsiFile::puMapItem_t> pmi;
    {
       const std::string tpath = std::string(path) + ".xrdt";
-      XrdOssIntegrityFile::mapTake(tpath, pmi);
+      XrdOssCsiFile::mapTake(tpath, pmi);
    }
 
    int utret = 0;
@@ -103,7 +103,7 @@ int XrdOssIntegrity::Unlink(const char *path, int Opts, XrdOucEnv *eP)
       const int uret = successor_->Unlink(path, Opts, eP);
       if (uret != XrdOssOK)
       {
-         XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck);
+         XrdOssCsiFile::mapReleaseLocked(pmi,&lck);
          return uret;
       }
 
@@ -111,12 +111,12 @@ int XrdOssIntegrity::Unlink(const char *path, int Opts, XrdOucEnv *eP)
    }
 
    pmi->unlinked = true;
-   XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck);
+   XrdOssCsiFile::mapReleaseLocked(pmi,&lck);
 
    return (utret == -ENOENT) ? 0 : utret;
 }
 
-int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
+int XrdOssCsi::Rename(const char *oldname, const char *newname,
                       XrdOucEnv  *old_env, XrdOucEnv  *new_env)
 {
    if (isTagFile(oldname) || isTagFile(newname)) return -ENOENT;
@@ -128,15 +128,15 @@ int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
    iold += ".xrdt";
 
    // get mapinfo entries for both old and possibly existing newfile
-   std::shared_ptr<XrdOssIntegrityFile::puMapItem_t> newpmi,pmi;
-   XrdOssIntegrityFile::mapTake(inew, newpmi);
-   XrdOssIntegrityFile::mapTake(iold   , pmi);
+   std::shared_ptr<XrdOssCsiFile::puMapItem_t> newpmi,pmi;
+   XrdOssCsiFile::mapTake(inew, newpmi);
+   XrdOssCsiFile::mapTake(iold   , pmi);
 
    // rename to self, do nothing
    if (newpmi == pmi)
    {
-      XrdOssIntegrityFile::mapReleaseLocked(pmi);
-      XrdOssIntegrityFile::mapReleaseLocked(newpmi);
+      XrdOssCsiFile::mapReleaseLocked(pmi);
+      XrdOssCsiFile::mapReleaseLocked(newpmi);
       return 0;
    }
 
@@ -156,16 +156,16 @@ int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
    if (pmi->unlinked || newpmi->unlinked)
    {
       // something overwrote the source or target file since we checked
-      XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck2);
-      XrdOssIntegrityFile::mapReleaseLocked(newpmi,&lck);
+      XrdOssCsiFile::mapReleaseLocked(pmi,&lck2);
+      XrdOssCsiFile::mapReleaseLocked(newpmi,&lck);
       return Rename(oldname, newname, old_env, new_env);
    }
 
    const int sret = successor_->Rename(oldname, newname, old_env, new_env);
    if (sret<0)
    {
-      XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck2);
-      XrdOssIntegrityFile::mapReleaseLocked(newpmi,&lck);
+      XrdOssCsiFile::mapReleaseLocked(pmi,&lck2);
+      XrdOssCsiFile::mapReleaseLocked(newpmi,&lck);
       return sret;
    }
 
@@ -181,8 +181,8 @@ int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
       else
       {
          (void) successor_->Rename(newname, oldname, new_env, old_env);
-         XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck2);
-         XrdOssIntegrityFile::mapReleaseLocked(newpmi,&lck);
+         XrdOssCsiFile::mapReleaseLocked(pmi,&lck2);
+         XrdOssCsiFile::mapReleaseLocked(newpmi,&lck);
          return iret;
       }
    }
@@ -193,26 +193,26 @@ int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
    }
 
    {
-      XrdSysMutexHelper lck3(XrdOssIntegrityFile::pumtx_);
-      auto mapidx_new = XrdOssIntegrityFile::pumap_.find(inew);
-      if (mapidx_new != XrdOssIntegrityFile::pumap_.end()) XrdOssIntegrityFile::pumap_.erase(mapidx_new);
+      XrdSysMutexHelper lck3(XrdOssCsiFile::pumtx_);
+      auto mapidx_new = XrdOssCsiFile::pumap_.find(inew);
+      if (mapidx_new != XrdOssCsiFile::pumap_.end()) XrdOssCsiFile::pumap_.erase(mapidx_new);
 
-      auto mapidx = XrdOssIntegrityFile::pumap_.find(iold);
-      assert(mapidx != XrdOssIntegrityFile::pumap_.end());
+      auto mapidx = XrdOssCsiFile::pumap_.find(iold);
+      assert(mapidx != XrdOssCsiFile::pumap_.end());
 
-      XrdOssIntegrityFile::pumap_.erase(mapidx);
-      XrdOssIntegrityFile::pumap_.insert(std::make_pair(inew, pmi));
+      XrdOssCsiFile::pumap_.erase(mapidx);
+      XrdOssCsiFile::pumap_.insert(std::make_pair(inew, pmi));
       pmi->dpath = newname;
       pmi->tpath = inew;
    }
          
-   XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck2);
-   XrdOssIntegrityFile::mapReleaseLocked(newpmi,&lck);
+   XrdOssCsiFile::mapReleaseLocked(pmi,&lck2);
+   XrdOssCsiFile::mapReleaseLocked(newpmi,&lck);
 
    return XrdOssOK;
 }
 
-int XrdOssIntegrity::Truncate(const char *path, unsigned long long size, XrdOucEnv *envP)
+int XrdOssCsi::Truncate(const char *path, unsigned long long size, XrdOucEnv *envP)
 {
    if (isTagFile(path)) return -ENOENT;
 
@@ -233,35 +233,35 @@ int XrdOssIntegrity::Truncate(const char *path, unsigned long long size, XrdOucE
    return XrdOssOK;
 }
 
-int XrdOssIntegrity::Reloc(const char *tident, const char *path,
+int XrdOssCsi::Reloc(const char *tident, const char *path,
                      const char *cgName, const char *anchor)
 {
    if (isTagFile(path)) return -ENOENT;
    return successor_->Reloc(tident, path, cgName, anchor);
 }
 
-int XrdOssIntegrity::Mkdir(const char *path, mode_t mode, int mkpath, XrdOucEnv *envP)
+int XrdOssCsi::Mkdir(const char *path, mode_t mode, int mkpath, XrdOucEnv *envP)
 {
    if (isTagFile(path)) return -ENOENT;
    return successor_->Mkdir(path, mode, mkpath, envP);
 }
 
-int XrdOssIntegrity::Create(const char *tident, const char *path, mode_t access_mode,
+int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
                       XrdOucEnv &env, int Opts)
 {
    if (isTagFile(path)) return -EPERM;
 
    // get mapinfo entries for file
-   std::shared_ptr<XrdOssIntegrityFile::puMapItem_t> pmi;
+   std::shared_ptr<XrdOssCsiFile::puMapItem_t> pmi;
    {
       const std::string tpath = std::string(path) + ".xrdt";
-      XrdOssIntegrityFile::mapTake(tpath, pmi);
+      XrdOssCsiFile::mapTake(tpath, pmi);
    }
 
    XrdSysMutexHelper lck(pmi->mtx);
    if (pmi->unlinked)
    {
-      XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck);
+      XrdOssCsiFile::mapReleaseLocked(pmi,&lck);
       return Create(tident, path, access_mode, env, Opts);
    }
 
@@ -271,36 +271,36 @@ int XrdOssIntegrity::Create(const char *tident, const char *path, mode_t access_
    {
       // asked to truncate but the file is already open: becomes difficult to sync.
       // So, return error
-      XrdOssIntegrityFile::mapReleaseLocked(pmi, &lck);
+      XrdOssCsiFile::mapReleaseLocked(pmi, &lck);
       return -ETXTBSY;
    }
 
    const int ret = successor_->Create(tident, path, access_mode, env, Opts);
-   XrdOssIntegrityFile::mapReleaseLocked(pmi, &lck);
+   XrdOssCsiFile::mapReleaseLocked(pmi, &lck);
 
    return ret;
 }
 
-int XrdOssIntegrity::Chmod(const char *path, mode_t mode, XrdOucEnv *envP)
+int XrdOssCsi::Chmod(const char *path, mode_t mode, XrdOucEnv *envP)
 {
    if (isTagFile(path)) return -ENOENT;
    return successor_->Chmod(path, mode, envP);
 }
 
-int XrdOssIntegrity::Remdir(const char *path, int Opts, XrdOucEnv *eP)
+int XrdOssCsi::Remdir(const char *path, int Opts, XrdOucEnv *eP)
 {
    if (isTagFile(path)) return -ENOENT;
    return successor_->Remdir(path, Opts, eP);
 }
 
-int XrdOssIntegrity::Stat(const char *path, struct stat *buff, int opts,
+int XrdOssCsi::Stat(const char *path, struct stat *buff, int opts,
                     XrdOucEnv  *EnvP)
 {
    if (isTagFile(path)) return -ENOENT;
    return successor_->Stat(path, buff, opts, EnvP);
 }
 
-int XrdOssIntegrity::StatPF(const char *path, struct stat *buff, int opts)
+int XrdOssCsi::StatPF(const char *path, struct stat *buff, int opts)
 {
    if (isTagFile(path)) return -ENOENT;
    if (!(opts & XrdOss::PF_dStat)) return successor_->StatPF(path, buff, opts);
@@ -312,7 +312,7 @@ int XrdOssIntegrity::StatPF(const char *path, struct stat *buff, int opts)
       return pfret;
    }
 
-   std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile("xrdt"));
+   std::unique_ptr<XrdOssCsiFile> fp((XrdOssCsiFile*)newFile("xrdt"));
    XrdOucEnv   myEnv;
    const int oret = fp->Open(path, O_RDONLY, 0600, myEnv);
    if (oret != XrdOssOK)
@@ -329,7 +329,7 @@ int XrdOssIntegrity::StatPF(const char *path, struct stat *buff, int opts)
    return XrdOssOK;
 }
 
-int XrdOssIntegrity::StatXA(const char *path, char *buff, int &blen,
+int XrdOssCsi::StatXA(const char *path, char *buff, int &blen,
                          XrdOucEnv *envP)
 {
    if (isTagFile(path)) return -ENOENT;
@@ -343,7 +343,7 @@ XrdOss *XrdOssAddStorageSystem2(XrdOss       *curr_oss,
                                 const char   *parms,
                                 XrdOucEnv    *envP)
 {
-   XrdOssIntegrity *myOss = new XrdOssIntegrity(curr_oss);
+   XrdOssCsi *myOss = new XrdOssCsi(curr_oss);
    if (myOss->Init(Logger, config_fn, parms, envP) != XrdOssOK)
    {
       delete myOss;

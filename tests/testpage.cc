@@ -44,11 +44,11 @@
 #include <fcntl.h>
 #include <cstdint>
 
-#define TMPFN "/tmp/xrdossintegrity_testfile_page"
+#define TMPFN "/tmp/xrdosscsi_testfile_page"
 
 namespace integrationTests {
 
-class ossintegrity_pageTest : public ::testing::Test {
+class osscsi_pageTest : public ::testing::Test {
 protected:
 
   virtual void SetUp() {
@@ -56,10 +56,10 @@ protected:
     ASSERT_TRUE(m_fdnull >= 0);
 
     const char *config_fn = NULL;
-    XrdSysLogger logger(m_fdnull,0);
+    m_logger = new XrdSysLogger(m_fdnull, 0);
 
     XrdVERSIONINFODEF(v, "testint", XrdVNUMBER,XrdVERSION);
-    XrdOss *ossP = XrdOssDefaultSS(&logger, config_fn, v);
+    XrdOss *ossP = XrdOssDefaultSS(m_logger, config_fn, v);
 
     m_libp = dlopen("libXrdOssIntegrity-5.so",RTLD_NOW|RTLD_GLOBAL);
     ASSERT_TRUE( m_libp != NULL );
@@ -69,7 +69,7 @@ protected:
 
     ASSERT_TRUE( oss2P != NULL );
 
-    m_oss = oss2P(ossP, &logger, config_fn, "", &m_env);
+    m_oss = oss2P(ossP, m_logger, config_fn, "", &m_env);
     ASSERT_TRUE(m_oss != NULL );
 
     m_file = m_oss->newFile("mytesttid");
@@ -96,6 +96,8 @@ protected:
     m_oss = NULL;
     dlclose(m_libp);
     m_libp = NULL;
+    delete m_logger;
+    m_logger = NULL;
     close(m_fdnull);
     m_fdnull = -1;
   }
@@ -115,6 +117,7 @@ protected:
   }
   
   int m_fdnull;
+  XrdSysLogger *m_logger;
   void *m_libp;
   XrdOucEnv m_env;
   XrdOss *m_oss;
@@ -123,11 +126,11 @@ protected:
   bool m_fileopen;
 };
 
-TEST_F(ossintegrity_pageTest,hasfscs) {
+TEST_F(osscsi_pageTest,hasfscs) {
   ASSERT_TRUE((m_oss->Features() & XRDOSS_HASFSCS) != 0);
 }
 
-TEST_F(ossintegrity_pageTest,onepage) {
+TEST_F(osscsi_pageTest,onepage) {
   ssize_t ret = m_file->Write(m_b, 0, 4096);
   ASSERT_TRUE(ret == 4096);
   uint8_t rbuf[4096];
@@ -138,7 +141,7 @@ TEST_F(ossintegrity_pageTest,onepage) {
   ASSERT_TRUE(csvec[0] == 0x353125d0);
 }
 
-TEST_F(ossintegrity_pageTest,zerolenread) {
+TEST_F(osscsi_pageTest,zerolenread) {
   ssize_t ret = m_file->Write(m_b, 0, 4096);
   ASSERT_TRUE(ret == 4096);
   uint8_t rbuf[4096];
@@ -165,7 +168,7 @@ TEST_F(ossintegrity_pageTest,zerolenread) {
   ASSERT_TRUE(ret == 0);
 }
 
-TEST_F(ossintegrity_pageTest,twopages) {
+TEST_F(osscsi_pageTest,twopages) {
   ssize_t ret = m_file->Write(m_b, 0, 8192);
   ASSERT_TRUE(ret == 8192);
   uint8_t rbuf[8192];
@@ -177,7 +180,7 @@ TEST_F(ossintegrity_pageTest,twopages) {
   ASSERT_TRUE(csvec[1] == 0x68547dba);
 }
 
-TEST_F(ossintegrity_pageTest,oneandpartpage) {
+TEST_F(osscsi_pageTest,oneandpartpage) {
   ssize_t ret = m_file->Write(m_b, 0, 6143);
   ASSERT_TRUE(ret == 6143);
   uint8_t rbuf[8192];
@@ -189,7 +192,7 @@ TEST_F(ossintegrity_pageTest,oneandpartpage) {
   ASSERT_TRUE(csvec[1] == 0x7bf5fca1);
 }
 
-TEST_F(ossintegrity_pageTest,upperpartpage) {
+TEST_F(osscsi_pageTest,upperpartpage) {
   ssize_t ret = m_file->Write(&m_b[2049], 2049, 2047);
   ASSERT_TRUE(ret == 2047);
   uint8_t rbuf[4096];
@@ -203,7 +206,7 @@ TEST_F(ossintegrity_pageTest,upperpartpage) {
   ASSERT_TRUE(csvec[0] == 0xfe965ca0);
 }
 
-TEST_F(ossintegrity_pageTest,pagewithhole) {
+TEST_F(osscsi_pageTest,pagewithhole) {
   ssize_t ret = m_file->Write(m_b, 0, 1024);
   ASSERT_TRUE(ret == 1024);
   ret = m_file->Write(&m_b[2048], 2048, 2048);
@@ -220,7 +223,7 @@ TEST_F(ossintegrity_pageTest,pagewithhole) {
   ASSERT_TRUE(csvec[0] == 0xf573261e);
 }
 
-TEST_F(ossintegrity_pageTest,pagewithholefilled) {
+TEST_F(osscsi_pageTest,pagewithholefilled) {
   ssize_t ret = m_file->Write(m_b, 0, 1024);
   ASSERT_TRUE(ret == 1024);
   ret = m_file->Write(&m_b[2048], 2048, 2048);
@@ -235,7 +238,7 @@ TEST_F(ossintegrity_pageTest,pagewithholefilled) {
   ASSERT_TRUE(csvec[0] == 0x353125d0);
 }
 
-TEST_F(ossintegrity_pageTest,extendtothree) {
+TEST_F(osscsi_pageTest,extendtothree) {
   ssize_t ret = m_file->Write(m_b, 0, 6143);
   ASSERT_TRUE(ret == 6143);
   ret = m_file->Write(&m_b[8192], 8192, 2049);
@@ -254,7 +257,7 @@ TEST_F(ossintegrity_pageTest,extendtothree) {
   ASSERT_TRUE(csvec[2] == 0x3f769559);
 }
 
-TEST_F(ossintegrity_pageTest,threepartial) {
+TEST_F(osscsi_pageTest,threepartial) {
   ssize_t ret = m_file->Write(&m_b[2049], 2049, 8193);
   ASSERT_TRUE(ret == 8193);
   uint8_t rbuf[12288];
@@ -270,7 +273,7 @@ TEST_F(ossintegrity_pageTest,threepartial) {
   ASSERT_TRUE(csvec[2] == 0x8bb57f35);
 }
 
-TEST_F(ossintegrity_pageTest,threepartial2) {
+TEST_F(osscsi_pageTest,threepartial2) {
   ssize_t ret = m_file->Write(&m_b[2049], 2049, 8193);
   ASSERT_TRUE(ret == 8193);
   ret = m_file->Write(&m_b[10],10,10);
@@ -292,7 +295,7 @@ TEST_F(ossintegrity_pageTest,threepartial2) {
   ASSERT_TRUE(csvec[2] == 0xb851d608);
 }
 
-TEST_F(ossintegrity_pageTest,readpartial) {
+TEST_F(osscsi_pageTest,readpartial) {
   ssize_t ret = m_file->Write(m_b, 0, 16384);
   ASSERT_TRUE(ret == 16384);
   uint8_t rbuf[12289];
@@ -301,7 +304,7 @@ TEST_F(ossintegrity_pageTest,readpartial) {
   ASSERT_TRUE(memcmp(rbuf,&m_b[2049],12289)==0);
 }
 
-TEST_F(ossintegrity_pageTest,extendwrite) {
+TEST_F(osscsi_pageTest,extendwrite) {
   ssize_t ret = m_file->Write(m_b,0,4000);
   ASSERT_TRUE(ret == 4000);
   ret = m_file->Write(&m_b[4200], 4200, 10);
@@ -327,7 +330,7 @@ TEST_F(ossintegrity_pageTest,extendwrite) {
   ASSERT_TRUE(memcmp(cbuf,rbuf,16484)==0);
 }
 
-TEST_F(ossintegrity_pageTest,badcrc) {
+TEST_F(osscsi_pageTest,badcrc) {
   uint32_t csvec[4] = { 0x1, 0x2, 0x3, 0x4 };
   ssize_t ret = m_file->pgWrite(m_b, 0, 16384, csvec, XrdOssDF::Verify);
   ASSERT_TRUE(ret == -EDOM);
@@ -371,7 +374,7 @@ TEST_F(ossintegrity_pageTest,badcrc) {
   ASSERT_TRUE(memcmp(csvec,&csvec2[1],3*4)==0);
 }
 
-TEST_F(ossintegrity_pageTest,truncate) {
+TEST_F(osscsi_pageTest,truncate) {
   ssize_t ret = m_file->Ftruncate(16384);
   ASSERT_TRUE(ret == 0);
   uint8_t rbuf[16384];
@@ -395,7 +398,7 @@ TEST_F(ossintegrity_pageTest,truncate) {
   ASSERT_TRUE(csvec[0] == 0x45b62822);
 }
 
-TEST_F(ossintegrity_pageTest,partialwrite) {
+TEST_F(osscsi_pageTest,partialwrite) {
   ssize_t ret = m_file->Write(m_b, 0, 12289);
   ASSERT_TRUE(ret == 12289);
   ret = m_file->Write(&m_b[2049], 2047, 8194);
@@ -409,7 +412,7 @@ TEST_F(ossintegrity_pageTest,partialwrite) {
   ASSERT_TRUE(memcmp(rbuf,cbuf,12289)==0);
 }
 
-TEST_F(ossintegrity_pageTest,pgwriteverifyabort) {
+TEST_F(osscsi_pageTest,pgwriteverifyabort) {
   ssize_t ret = m_file->Write(m_b, 0, 12288);
   ASSERT_TRUE(ret == 12288);
   uint8_t buf[20480];
@@ -433,7 +436,7 @@ TEST_F(ossintegrity_pageTest,pgwriteverifyabort) {
   ASSERT_TRUE(ret == 12288);
 }
 
-TEST_F(ossintegrity_pageTest,writeoverlap) {
+TEST_F(osscsi_pageTest,writeoverlap) {
   uint32_t csvec[4]={0},csvec2[4];
   ssize_t ret = m_file->pgWrite(m_b, 0, 16384, csvec, XrdOssDF::doCalc);
   ASSERT_TRUE(ret == 16384);

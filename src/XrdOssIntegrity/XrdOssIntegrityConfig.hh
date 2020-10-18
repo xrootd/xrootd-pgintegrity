@@ -1,5 +1,5 @@
-#ifndef _XRDOSSINTEGRITYCONFIG_H
-#define _XRDOSSINTEGRITYCONFIG_H
+#ifndef _XRDOSSCSICONFIG_H
+#define _XRDOSSCSICONFIG_H
 /******************************************************************************/
 /*                                                                            */
 /*             X r d O s s I n t e g r i t y C o n f i g . h h                */
@@ -37,12 +37,12 @@
 
 #include <string>
 
-class XrdOssIntegrityConfig
+class XrdOssCsiConfig
 {
 public:
 
-  XrdOssIntegrityConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true) { }
-  ~XrdOssIntegrityConfig() { }
+  XrdOssCsiConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true) { }
+  ~XrdOssCsiConfig() { }
 
   int Init(XrdSysError &, const char *, const char *, XrdOucEnv *);
 
