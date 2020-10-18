@@ -42,6 +42,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <assert.h>
 
 XrdVERSIONINFO(XrdOssAddStorageSystem2,XrdOssIntegrity)
 
@@ -86,20 +87,33 @@ int XrdOssIntegrity::Unlink(const char *path, int Opts, XrdOucEnv *eP)
 {
    if (isTagFile(path)) return -ENOENT;
 
-   std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile("xrdt"));
-   XrdOucEnv   myEnv;
-   const int oret = fp->Open(path, O_RDWR, 0600, myEnv);
-   if (oret != XrdOssOK)
+   // get mapinfo entries for file
+   std::shared_ptr<XrdOssIntegrityFile::puMapItem_t> pmi;
    {
-      return oret;
+      const std::string tpath = std::string(path) + ".xrdt";
+      XrdOssIntegrityFile::mapTake(tpath, pmi);
    }
 
-   const int ret = fp->FUnlink(Opts, eP);
+   int utret = 0;
 
-   long long retsz=0;
-   fp->Close(&retsz);
+   XrdSysMutexHelper lck(pmi->mtx);
+   pmi->dpath = path;
+   if (!pmi->unlinked)
+   {
+      const int uret = successor_->Unlink(path, Opts, eP);
+      if (uret != XrdOssOK)
+      {
+         XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck);
+         return uret;
+      }
 
-   return ret;
+      utret = successor_->Unlink(pmi->tpath.c_str(), Opts, eP);
+   }
+
+   pmi->unlinked = true;
+   XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck);
+
+   return (utret == -ENOENT) ? 0 : utret;
 }
 
 int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
@@ -107,20 +121,95 @@ int XrdOssIntegrity::Rename(const char *oldname, const char *newname,
 {
    if (isTagFile(oldname) || isTagFile(newname)) return -ENOENT;
 
-   std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile("xrdt"));
-   XrdOucEnv   myEnv;
-   const int oret = fp->Open(oldname, O_RDWR, 0600, myEnv);
-   if (oret != XrdOssOK)
+   std::string inew(newname);
+   inew += ".xrdt";
+
+   std::string iold(oldname);
+   iold += ".xrdt";
+
+   // get mapinfo entries for both old and possibly existing newfile
+   std::shared_ptr<XrdOssIntegrityFile::puMapItem_t> newpmi,pmi;
+   XrdOssIntegrityFile::mapTake(inew, newpmi);
+   XrdOssIntegrityFile::mapTake(iold   , pmi);
+
+   // rename to self, do nothing
+   if (newpmi == pmi)
    {
-      return oret;
+      XrdOssIntegrityFile::mapReleaseLocked(pmi);
+      XrdOssIntegrityFile::mapReleaseLocked(newpmi);
+      return 0;
    }
 
-   const int rnret = fp->FRename(newname, old_env, new_env);
+   // take in consistent order
+   XrdSysMutexHelper lck(NULL), lck2(NULL);
+   if (newpmi > pmi)
+   {
+     lck.Lock(&newpmi->mtx);
+     lck2.Lock(&pmi->mtx);
+   }
+   else
+   {
+     lck2.Lock(&pmi->mtx);
+     lck.Lock(&newpmi->mtx);
+   }
 
-   long long retsz=0;
-   fp->Close(&retsz);
+   if (pmi->unlinked || newpmi->unlinked)
+   {
+      // something overwrote the source or target file since we checked
+      XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck2);
+      XrdOssIntegrityFile::mapReleaseLocked(newpmi,&lck);
+      return Rename(oldname, newname, old_env, new_env);
+   }
 
-   return rnret;
+   const int sret = successor_->Rename(oldname, newname, old_env, new_env);
+   if (sret<0)
+   {
+      XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck2);
+      XrdOssIntegrityFile::mapReleaseLocked(newpmi,&lck);
+      return sret;
+   }
+
+   const int iret = successor_->Rename(iold.c_str(), inew.c_str(), old_env, new_env);
+   if (iret<0)
+   {
+      if (iret == -ENOENT)
+      {
+         // if there is no tag file for oldfile, but newfile existed previously with a tag file,
+         // we don't want to be left with the previously existing tagfile
+         (void) successor_->Unlink(inew.c_str(), 0, new_env);
+      }
+      else
+      {
+         (void) successor_->Rename(newname, oldname, new_env, old_env);
+         XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck2);
+         XrdOssIntegrityFile::mapReleaseLocked(newpmi,&lck);
+         return iret;
+      }
+   }
+
+   if (newpmi)
+   {
+      newpmi->unlinked = true;
+   }
+
+   {
+      XrdSysMutexHelper lck3(XrdOssIntegrityFile::pumtx_);
+      auto mapidx_new = XrdOssIntegrityFile::pumap_.find(inew);
+      if (mapidx_new != XrdOssIntegrityFile::pumap_.end()) XrdOssIntegrityFile::pumap_.erase(mapidx_new);
+
+      auto mapidx = XrdOssIntegrityFile::pumap_.find(iold);
+      assert(mapidx != XrdOssIntegrityFile::pumap_.end());
+
+      XrdOssIntegrityFile::pumap_.erase(mapidx);
+      XrdOssIntegrityFile::pumap_.insert(std::make_pair(inew, pmi));
+      pmi->dpath = newname;
+      pmi->tpath = inew;
+   }
+         
+   XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck2);
+   XrdOssIntegrityFile::mapReleaseLocked(newpmi,&lck);
+
+   return XrdOssOK;
 }
 
 int XrdOssIntegrity::Truncate(const char *path, unsigned long long size, XrdOucEnv *envP)
@@ -162,33 +251,34 @@ int XrdOssIntegrity::Create(const char *tident, const char *path, mode_t access_
 {
    if (isTagFile(path)) return -EPERM;
 
-   // don't let create do any truncating
-   // instead let the open do it: as it is aware of the tag file
-   int dopts = Opts;
-   dopts = (((dopts>>8)&(~O_TRUNC))<<8)|(dopts&0xff);
-
-   const int iret = successor_->Create(tident, path, access_mode, env, dopts);
-   if (iret != XrdOssOK) return iret;
-
-   // If create did want truncate we make sure give open the
-   // chance to truncated now, as subsequently the user may not give O_TRUNC when
-   // opening the file. If it is was a new empty file (without truncate) it will
-   // be zero length and we'll try to make the tag file at open, no need to do it here.
-
-   bool isTrunc = ((Opts>>8)&O_TRUNC) ? true : false;
-   if (!isTrunc) return XrdOssOK;
-
-   const int flags = O_RDWR|O_CREAT|O_TRUNC;
-
-   std::unique_ptr<XrdOssIntegrityFile> fp((XrdOssIntegrityFile*)newFile(tident));
-   XrdOucEnv   myEnv;
-   const int oret = fp->Open(path, flags, access_mode, myEnv);
-   if (oret == XrdOssOK)
+   // get mapinfo entries for file
+   std::shared_ptr<XrdOssIntegrityFile::puMapItem_t> pmi;
    {
-      long long retsz=0;
-      fp->Close(&retsz);
+      const std::string tpath = std::string(path) + ".xrdt";
+      XrdOssIntegrityFile::mapTake(tpath, pmi);
    }
-   return XrdOssOK;
+
+   XrdSysMutexHelper lck(pmi->mtx);
+   if (pmi->unlinked)
+   {
+      XrdOssIntegrityFile::mapReleaseLocked(pmi,&lck);
+      return Create(tident, path, access_mode, env, Opts);
+   }
+
+   const bool isTrunc = ((Opts>>8)&O_TRUNC) ? true : false;
+
+   if (isTrunc && pmi->pages)
+   {
+      // asked to truncate but the file is already open: becomes difficult to sync.
+      // So, return error
+      XrdOssIntegrityFile::mapReleaseLocked(pmi, &lck);
+      return -ETXTBSY;
+   }
+
+   const int ret = successor_->Create(tident, path, access_mode, env, Opts);
+   XrdOssIntegrityFile::mapReleaseLocked(pmi, &lck);
+
+   return ret;
 }
 
 int XrdOssIntegrity::Chmod(const char *path, mode_t mode, XrdOucEnv *envP)

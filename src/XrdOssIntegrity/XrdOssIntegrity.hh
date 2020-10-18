@@ -124,10 +124,6 @@ virtual        ~XrdOssIntegrityFile();
 
         int VerificationStatus();
 
-        int FRename(const char *, XrdOucEnv *old_env=0, XrdOucEnv *new_env=0);
-
-        int FUnlink(int, XrdOucEnv *);
-
         XrdOssIntegrityPages *Pages() {
            return pmi_->pages.get();
         }
@@ -142,6 +138,10 @@ virtual        ~XrdOssIntegrityFile();
 
            puMapItem_t() : busy(0), unlinked(false) { }
         };
+
+static  int mapReleaseLocked(std::shared_ptr<puMapItem_t> &, XrdSysMutexHelper *plck=NULL);
+
+static  void mapTake(const std::string &, std::shared_ptr<puMapItem_t> &, bool create=true);
 
 static  XrdSysMutex pumtx_;
 static  std::unordered_map<std::string, std::shared_ptr<puMapItem_t> > pumap_;
@@ -170,8 +170,8 @@ public:
 virtual XrdOssDF *newDir(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssIntegrityDir(successor_, tident, config_); }
 virtual XrdOssDF *newFile(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssIntegrityFile(successor_, tident, config_); }
 
-virtual int       Init(XrdSysLogger *, const char *) /* override */ { return XrdOssOK; }
-virtual int       Init(XrdSysLogger *, const char *, XrdOucEnv *) /* override */ { return XrdOssOK; }
+virtual int       Init(XrdSysLogger *lp, const char *cfn) /* override */ { return Init(lp, cfn, 0, 0); }
+virtual int       Init(XrdSysLogger *lp, const char *cfn, XrdOucEnv *envP) /* override */ { return Init(lp, cfn, 0, envP); }
         int       Init(XrdSysLogger *, const char *, const char *, XrdOucEnv *);
 
 virtual uint64_t  Features() /* override */ { return (successor_->Features() | XRDOSS_HASFSCS); }

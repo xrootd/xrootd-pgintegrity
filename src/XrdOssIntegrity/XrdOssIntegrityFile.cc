@@ -68,20 +68,7 @@ int XrdOssIntegrityFile::pageMapClose()
    bool doclose = false;
 
    XrdSysMutexHelper lck(pmi_->mtx);
-   {
-      XrdSysMutexHelper lck2(pumtx_);
-      pmi_->busy--;
-      if (pmi_->busy == 0)
-      {
-         if (!pmi_->unlinked)
-         {
-            auto mapidx = pumap_.find(pmi_->tpath);
-            assert(mapidx != pumap_.end());
-            pumap_.erase(mapidx);
-         }
-         doclose = true;
-      }
-   }
+   if (mapReleaseLocked(pmi_)) doclose = true;
 
    int cpret = 0;
    if (doclose)
@@ -93,10 +80,46 @@ int XrdOssIntegrityFile::pageMapClose()
       }
    }
 
-   pmi_->mtx.UnLock();
+   lck.UnLock();
    pmi_.reset();
 
    return cpret;
+}
+
+void XrdOssIntegrityFile::mapTake(const std::string &key, std::shared_ptr<puMapItem_t> &pmi, const bool create)
+{
+   XrdSysMutexHelper lck(pumtx_);
+   auto mapidx = pumap_.find(key);
+   if (mapidx == pumap_.end())
+   {
+      if (!create) return;
+      pmi.reset(new puMapItem_t());
+      pmi->tpath = key;
+      pumap_.insert(std::make_pair(key, pmi));
+   }
+   else
+   {
+      pmi = mapidx->second;
+   }
+   pmi->busy++;
+}
+
+int XrdOssIntegrityFile::mapReleaseLocked(std::shared_ptr<puMapItem_t> &pmi, XrdSysMutexHelper *plck)
+{
+   pmi->busy--;
+   XrdSysMutexHelper lck(pumtx_);
+   auto mapidx = pumap_.find(pmi->tpath);
+   if (pmi->busy == 0 || pmi->unlinked)
+   {
+      if (mapidx != pumap_.end() && mapidx->second == pmi)
+      {
+         pumap_.erase(mapidx);
+      }
+      if (plck) plck->UnLock();
+      return (pmi->busy == 0) ? 1 : 0;
+   }
+   if (plck) plck->UnLock();
+   return 0;
 }
 
 int XrdOssIntegrityFile::pageAndFileOpen(const char *fn, const int dflags, const int Oflag, const mode_t Mode, XrdOucEnv &Env)
@@ -105,29 +128,15 @@ int XrdOssIntegrityFile::pageAndFileOpen(const char *fn, const int dflags, const
 
    {
       std::string tpath = std::string(fn) + ".xrdt";
-      XrdSysMutexHelper lck(pumtx_);
-      auto mapidx = pumap_.find(tpath);
-      if (mapidx == pumap_.end())
-      {
-         pmi_.reset(new puMapItem_t());
-         pmi_->dpath = std::string(fn);
-         pmi_->tpath = tpath;
-         pumap_.insert(std::make_pair(tpath, pmi_));
-      }
-      else
-      {
-         pmi_ = mapidx->second;
-         assert(!pmi_->unlinked);
-      }
-      pmi_->busy++;
+      mapTake(tpath, pmi_);
    }
 
    XrdSysMutexHelper lck(pmi_->mtx);
+   pmi_->dpath = fn;
    if (pmi_->unlinked)
    {
-     pmi_->busy--;
+     mapReleaseLocked(pmi_, &lck);
      // filename replaced since check, try again
-     lck.UnLock();
      pmi_.reset();
      return pageAndFileOpen(fn, dflags, Oflag, Mode, Env);
    }
@@ -136,6 +145,8 @@ int XrdOssIntegrityFile::pageAndFileOpen(const char *fn, const int dflags, const
    {
       // asked to truncate but the file is already open: becomes difficult to sync.
       // So, return error
+      mapReleaseLocked(pmi_, &lck);
+      pmi_.reset();
       return -ETXTBSY;
    }
 
@@ -162,15 +173,7 @@ int XrdOssIntegrityFile::pageAndFileOpen(const char *fn, const int dflags, const
       (void) successor_->Close();
    }
 
-   XrdSysMutexHelper lck2(pumtx_);
-   pmi_->busy--;
-   auto mapidx = pumap_.find(pmi_->tpath);
-   if (pmi_->busy == 0)
-   {
-      assert(mapidx != pumap_.end());
-      pumap_.erase(mapidx);
-   }
-   pmi_->mtx.UnLock();
+   mapReleaseLocked(pmi_, &lck);
    pmi_.reset();
 
    return (dataret != XrdOssOK) ? dataret : pageret;
@@ -620,112 +623,4 @@ int XrdOssIntegrityFile::VerificationStatus()
 {
    if (!pmi_) return 0;
    return Pages()->VerificationStatus();
-}
-
-int XrdOssIntegrityFile::FRename(const char *newname, XrdOucEnv *old_env, XrdOucEnv *new_env)
-{
-   if (!pmi_) return -EBADF;
-   if (rdonly_) return -EBADF;
-
-   std::string inew(newname);
-   inew += ".xrdt";
-
-   // in case target name exists get its mapinfo
-   std::shared_ptr<puMapItem_t> newpmi;
-   {
-      XrdSysMutexHelper lck(pumtx_);
-      auto mapidx = pumap_.find(inew);
-      if (mapidx != pumap_.end())
-      {
-         newpmi = mapidx->second;
-         assert(!newpmi->unlinked);
-      }
-   }
-
-   // rename to self, do nothing
-   if (newpmi == pmi_) return 0;
-
-   XrdSysMutexHelper lck(newpmi ? &newpmi->mtx : NULL);
-   if (newpmi && newpmi->unlinked)
-   {
-     // something overwrote the target file since we checked
-     lck.UnLock();
-     return FRename(newname, old_env, new_env);
-   }
-
-   XrdSysMutexHelper lck2(pmi_->mtx);
-   if (pmi_->unlinked)
-   {
-      // if we've already been unlinked, can not rename
-      return -ENOENT;
-   }
-
-   std::string oldtag = pmi_->tpath;
-   std::string olddata = pmi_->dpath;
-
-   const int sret = parentOss_->Rename(pmi_->dpath.c_str(), newname, old_env, new_env);
-   if (sret<0) return sret;
-
-   const int iret = parentOss_->Rename(pmi_->tpath.c_str(), inew.c_str(), old_env, new_env);
-   if (iret<0)
-   {
-      if (iret == -ENOENT)
-      {
-         // if there is no tag file for oldfile, but newfile existed previously with a tag file,
-         // we don't want to be left with the previously existing tagfile
-         (void) parentOss_->Unlink(inew.c_str(), 0, new_env);
-      }
-      else
-      {
-         (void) parentOss_->Rename(newname, pmi_->dpath.c_str(), new_env, old_env);
-         return iret;
-      }
-   }
-
-   if (newpmi)
-   {
-      newpmi->unlinked = true;
-   }
-
-   {
-      XrdSysMutexHelper lck3(pumtx_);
-      auto mapidx_new = pumap_.find(inew);
-      if (mapidx_new != pumap_.end()) pumap_.erase(mapidx_new);
-
-      auto mapidx = pumap_.find(pmi_->tpath);
-      assert(mapidx != pumap_.end());
-
-      pumap_.erase(mapidx);
-      pumap_.insert(std::make_pair(inew, pmi_));
-      pmi_->dpath = newname;
-      pmi_->tpath = inew;
-   }
-
-   return XrdOssOK;
-}
-
-int XrdOssIntegrityFile::FUnlink(int Opts, XrdOucEnv *eP)
-{
-   if (!pmi_) return -EBADF;
-   if (rdonly_) return -EBADF;
-
-   int utret = 0;
-
-   XrdSysMutexHelper lck(pmi_->mtx);
-   if (!pmi_->unlinked)
-   {
-      const int uret = parentOss_->Unlink(pmi_->dpath.c_str(), Opts, eP);
-      if (uret != XrdOssOK) return uret;
-
-      utret = parentOss_->Unlink(pmi_->tpath.c_str(), Opts, eP);
-
-      XrdSysMutexHelper lck2(pumtx_);
-      auto mapidx = pumap_.find(pmi_->tpath);
-      assert(mapidx != pumap_.end());
-      pumap_.erase(mapidx);
-   }
-
-   pmi_->unlinked = true;
-
-   return (utret == -ENOENT) ? 0 : utret;
 }
