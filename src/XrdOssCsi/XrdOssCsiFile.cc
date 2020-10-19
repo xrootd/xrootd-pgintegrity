@@ -68,7 +68,7 @@ int XrdOssCsiFile::pageMapClose()
    bool doclose = false;
 
    XrdSysMutexHelper lck(pmi_->mtx);
-   if (mapReleaseLocked(pmi_)) doclose = true;
+   if (mapRelease(pmi_)) doclose = true;
 
    int cpret = 0;
    if (doclose)
@@ -104,10 +104,10 @@ void XrdOssCsiFile::mapTake(const std::string &key, std::shared_ptr<puMapItem_t>
    pmi->refcount++;
 }
 
-int XrdOssCsiFile::mapReleaseLocked(std::shared_ptr<puMapItem_t> &pmi, XrdSysMutexHelper *plck)
+int XrdOssCsiFile::mapRelease(std::shared_ptr<puMapItem_t> &pmi, XrdSysMutexHelper *plck)
 {
-   pmi->refcount--;
    XrdSysMutexHelper lck(pumtx_);
+   pmi->refcount--;
    auto mapidx = pumap_.find(pmi->tpath);
    if (pmi->refcount == 0 || pmi->unlinked)
    {
@@ -133,7 +133,7 @@ int XrdOssCsiFile::pageAndFileOpen(const char *fn, const int dflags, const int O
    pmi_->dpath = fn;
    if (pmi_->unlinked)
    {
-     mapReleaseLocked(pmi_, &lck);
+     mapRelease(pmi_, &lck);
      // filename replaced since check, try again
      pmi_.reset();
      return pageAndFileOpen(fn, dflags, Oflag, Mode, Env);
@@ -143,7 +143,7 @@ int XrdOssCsiFile::pageAndFileOpen(const char *fn, const int dflags, const int O
    {
       // asked to truncate but the file is already open: becomes difficult to sync.
       // So, return error
-      mapReleaseLocked(pmi_, &lck);
+      mapRelease(pmi_, &lck);
       pmi_.reset();
       return -ETXTBSY;
    }
@@ -171,7 +171,7 @@ int XrdOssCsiFile::pageAndFileOpen(const char *fn, const int dflags, const int O
       (void) successor_->Close();
    }
 
-   mapReleaseLocked(pmi_, &lck);
+   mapRelease(pmi_, &lck);
    pmi_.reset();
 
    return (dataret != XrdOssOK) ? dataret : pageret;

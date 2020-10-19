@@ -103,7 +103,7 @@ int XrdOssCsi::Unlink(const char *path, int Opts, XrdOucEnv *eP)
       const int uret = successor_->Unlink(path, Opts, eP);
       if (uret != XrdOssOK)
       {
-         XrdOssCsiFile::mapReleaseLocked(pmi,&lck);
+         XrdOssCsiFile::mapRelease(pmi,&lck);
          return uret;
       }
 
@@ -111,7 +111,7 @@ int XrdOssCsi::Unlink(const char *path, int Opts, XrdOucEnv *eP)
    }
 
    pmi->unlinked = true;
-   XrdOssCsiFile::mapReleaseLocked(pmi,&lck);
+   XrdOssCsiFile::mapRelease(pmi,&lck);
 
    return (utret == -ENOENT) ? 0 : utret;
 }
@@ -135,8 +135,8 @@ int XrdOssCsi::Rename(const char *oldname, const char *newname,
    // rename to self, do nothing
    if (newpmi == pmi)
    {
-      XrdOssCsiFile::mapReleaseLocked(pmi);
-      XrdOssCsiFile::mapReleaseLocked(newpmi);
+      XrdOssCsiFile::mapRelease(pmi);
+      XrdOssCsiFile::mapRelease(newpmi);
       return 0;
    }
 
@@ -156,16 +156,16 @@ int XrdOssCsi::Rename(const char *oldname, const char *newname,
    if (pmi->unlinked || newpmi->unlinked)
    {
       // something overwrote the source or target file since we checked
-      XrdOssCsiFile::mapReleaseLocked(pmi,&lck2);
-      XrdOssCsiFile::mapReleaseLocked(newpmi,&lck);
+      XrdOssCsiFile::mapRelease(pmi,&lck2);
+      XrdOssCsiFile::mapRelease(newpmi,&lck);
       return Rename(oldname, newname, old_env, new_env);
    }
 
    const int sret = successor_->Rename(oldname, newname, old_env, new_env);
    if (sret<0)
    {
-      XrdOssCsiFile::mapReleaseLocked(pmi,&lck2);
-      XrdOssCsiFile::mapReleaseLocked(newpmi,&lck);
+      XrdOssCsiFile::mapRelease(pmi,&lck2);
+      XrdOssCsiFile::mapRelease(newpmi,&lck);
       return sret;
    }
 
@@ -181,8 +181,8 @@ int XrdOssCsi::Rename(const char *oldname, const char *newname,
       else
       {
          (void) successor_->Rename(newname, oldname, new_env, old_env);
-         XrdOssCsiFile::mapReleaseLocked(pmi,&lck2);
-         XrdOssCsiFile::mapReleaseLocked(newpmi,&lck);
+         XrdOssCsiFile::mapRelease(pmi,&lck2);
+         XrdOssCsiFile::mapRelease(newpmi,&lck);
          return iret;
       }
    }
@@ -206,8 +206,8 @@ int XrdOssCsi::Rename(const char *oldname, const char *newname,
       pmi->tpath = inew;
    }
          
-   XrdOssCsiFile::mapReleaseLocked(pmi,&lck2);
-   XrdOssCsiFile::mapReleaseLocked(newpmi,&lck);
+   XrdOssCsiFile::mapRelease(pmi,&lck2);
+   XrdOssCsiFile::mapRelease(newpmi,&lck);
 
    return XrdOssOK;
 }
@@ -261,7 +261,7 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
    XrdSysMutexHelper lck(pmi->mtx);
    if (pmi->unlinked)
    {
-      XrdOssCsiFile::mapReleaseLocked(pmi,&lck);
+      XrdOssCsiFile::mapRelease(pmi,&lck);
       return Create(tident, path, access_mode, env, Opts);
    }
 
@@ -271,12 +271,12 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
    {
       // asked to truncate but the file is already open: becomes difficult to sync.
       // So, return error
-      XrdOssCsiFile::mapReleaseLocked(pmi, &lck);
+      XrdOssCsiFile::mapRelease(pmi, &lck);
       return -ETXTBSY;
    }
 
    const int ret = successor_->Create(tident, path, access_mode, env, Opts);
-   XrdOssCsiFile::mapReleaseLocked(pmi, &lck);
+   XrdOssCsiFile::mapRelease(pmi, &lck);
 
    return ret;
 }

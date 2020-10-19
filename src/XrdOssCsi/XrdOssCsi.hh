@@ -139,7 +139,7 @@ virtual        ~XrdOssCsiFile();
            puMapItem_t() : refcount(0), unlinked(false) { }
         };
 
-static  int mapReleaseLocked(std::shared_ptr<puMapItem_t> &, XrdSysMutexHelper *plck=NULL);
+static  int mapRelease(std::shared_ptr<puMapItem_t> &, XrdSysMutexHelper *plck=NULL);
 
 static  void mapTake(const std::string &, std::shared_ptr<puMapItem_t> &, bool create=true);
 
