@@ -44,7 +44,7 @@ class XrdOssCsiPages
 public:
    typedef std::pair<off_t,off_t> Sizes_t;
 
-   XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, const std::string &);
+   XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, const char *);
    ~XrdOssCsiPages() { (void)Close(); }
 
    int Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP);
@@ -81,6 +81,7 @@ protected:
 
    const std::string fn_;
    const std::string tident_;
+   const char *tident;
 
    int LockSetTrackedSize(off_t);
    int LockTruncateSize(off_t,bool);

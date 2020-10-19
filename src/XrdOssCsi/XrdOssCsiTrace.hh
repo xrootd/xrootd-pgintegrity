@@ -47,7 +47,7 @@
 
 #define TRACE(act, x) \
         if (QTRACE(act)) \
-           {OssCsiTrace.Beg(epname,tident_.c_str()); cerr <<x; OssCsiTrace.End();}
+           {OssCsiTrace.Beg(epname,tident); cerr <<x; OssCsiTrace.End();}
 
 #define TRACEReturn(type, ecode, msg) \
                {TRACE(type, "err " <<ecode <<msg); return ecode;}

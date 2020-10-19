@@ -42,7 +42,7 @@
 class XrdOssCsiTagstoreFile : public XrdOssCsiTagstore
 {
 public:
-   XrdOssCsiTagstoreFile(const std::string &fn, std::unique_ptr<XrdOssDF> fd, const std::string &tid) : fn_(fn), fd_(std::move(fd)), trackinglen_(0), isOpen(false), tident_(tid) { }
+   XrdOssCsiTagstoreFile(const std::string &fn, std::unique_ptr<XrdOssDF> fd, const char *tid) : fn_(fn), fd_(std::move(fd)), trackinglen_(0), isOpen(false), tident_(tid), tident(tident_.c_str()) { }
    virtual ~XrdOssCsiTagstoreFile() { if (isOpen) { (void)Close(); } }
 
    virtual int Open(const char *, off_t, int, XrdOucEnv &) /* override */;
@@ -140,6 +140,7 @@ private:
    off_t actualsize_;
    bool isOpen;
    const std::string tident_;
+   const char *tident;
    bool machineIsBige_;
    bool fileIsBige_;
    uint8_t header_[20];

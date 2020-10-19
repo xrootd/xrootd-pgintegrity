@@ -101,25 +101,23 @@ void XrdOssCsiFile::mapTake(const std::string &key, std::shared_ptr<puMapItem_t>
    {
       pmi = mapidx->second;
    }
-   pmi->busy++;
+   pmi->refcount++;
 }
 
 int XrdOssCsiFile::mapReleaseLocked(std::shared_ptr<puMapItem_t> &pmi, XrdSysMutexHelper *plck)
 {
-   pmi->busy--;
+   pmi->refcount--;
    XrdSysMutexHelper lck(pumtx_);
    auto mapidx = pumap_.find(pmi->tpath);
-   if (pmi->busy == 0 || pmi->unlinked)
+   if (pmi->refcount == 0 || pmi->unlinked)
    {
       if (mapidx != pumap_.end() && mapidx->second == pmi)
       {
          pumap_.erase(mapidx);
       }
-      if (plck) plck->UnLock();
-      return (pmi->busy == 0) ? 1 : 0;
    }
    if (plck) plck->UnLock();
-   return 0;
+   return (pmi->refcount == 0) ? 1 : 0;
 }
 
 int XrdOssCsiFile::pageAndFileOpen(const char *fn, const int dflags, const int Oflag, const mode_t Mode, XrdOucEnv &Env)
@@ -249,16 +247,16 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    if ((tagFlags & O_CREAT))
    {
       const int crOpts = XRDOSS_mkpath;
-      const int ret = parentOss_->Create(tident_, pmi_->tpath.c_str(), 0600, newEnv, (tagFlags<<8)|crOpts);
+      const int ret = parentOss_->Create(tident, pmi_->tpath.c_str(), 0600, newEnv, (tagFlags<<8)|crOpts);
       if (ret != XrdOssOK && ret != -ENOTSUP && ret != -EROFS)
       {
          return ret;
       }
    }
 
-   std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident_));
-   std::unique_ptr<XrdOssCsiTagstore> ts(new XrdOssCsiTagstoreFile(pmi_->dpath, std::move(integFile), tident_));
-   std::unique_ptr<XrdOssCsiPages> pages(new XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), tident_));
+   std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident));
+   std::unique_ptr<XrdOssCsiTagstore> ts(new XrdOssCsiTagstoreFile(pmi_->dpath, std::move(integFile), tident));
+   std::unique_ptr<XrdOssCsiPages> pages(new XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), tident));
 
    int puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, tagFlags, newEnv);
    if (puret<0)

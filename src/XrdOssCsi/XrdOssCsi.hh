@@ -100,7 +100,7 @@ virtual ssize_t pgWrite(void*, off_t, size_t, uint32_t*, uint64_t) /* override *
 virtual int     pgWrite(XrdSfsAio*, uint64_t) /* override */;
 
                 XrdOssCsiFile(XrdOss *parent, const char *tid, XrdOssCsiConfig &cf) :
-                    XrdOssDFHandler(parent->newFile(tid)), parentOss_(parent), tident_(tid), config_(cf),
+                    XrdOssDFHandler(parent->newFile(tid)), parentOss_(parent), tident(tid), config_(cf),
                     rdonly_(false), aioCntCond_(0), aioCnt_(0), aioCntWaiters_(0) { }
 virtual        ~XrdOssCsiFile();
 
@@ -129,14 +129,14 @@ virtual        ~XrdOssCsiFile();
         }
 
         struct puMapItem_t {
-           int busy;                              // access under map's lock
+           int refcount;                              // access under map's lock
            XrdSysMutex mtx;
            std::unique_ptr<XrdOssCsiPages> pages;
            std::string dpath;
            std::string tpath;
            bool unlinked;
 
-           puMapItem_t() : busy(0), unlinked(false) { }
+           puMapItem_t() : refcount(0), unlinked(false) { }
         };
 
 static  int mapReleaseLocked(std::shared_ptr<puMapItem_t> &, XrdSysMutexHelper *plck=NULL);
@@ -148,7 +148,7 @@ static  std::unordered_map<std::string, std::shared_ptr<puMapItem_t> > pumap_;
 
 private:
         XrdOss *parentOss_;
-        const char *tident_;
+        const char *tident;
         std::shared_ptr<puMapItem_t> pmi_;
         XrdOssCsiFileAioStore aiostore_;
         XrdOssCsiConfig &config_;

@@ -42,7 +42,7 @@
 
 extern XrdOucTrace  OssCsiTrace;
 
-XrdOssCsiPages::XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, const std::string &tid) :
+XrdOssCsiPages::XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, const char *tid) :
         ts_(std::move(ts)),
         writeHoles_(wh),
         allowMissingTags_(am),
@@ -51,7 +51,8 @@ XrdOssCsiPages::XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiT
         tscond_(0),
         tsforupdate_(false),
         fn_(fn),
-        tident_(tid)
+        tident_(tid),
+        tident(tident_.c_str())
 {
    // empty constructor
 }
