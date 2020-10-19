@@ -2,7 +2,7 @@
 #define _XRDOSSCSITAGSTOREFILE_H
 /******************************************************************************/
 /*                                                                            */
-/*        X r d O s s I n t e g r i t y T a g s t o r e F i l e . h h         */
+/*              X r d O s s C s i T a g s t o r e F i l e . h h               */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -32,7 +32,7 @@
 /******************************************************************************/
 
 #include "XrdOss/XrdOss.hh"
-#include "XrdOssIntegrityTagstore.hh"
+#include "XrdOssCsiTagstore.hh"
 #include "XrdOuc/XrdOucCRC.hh"
 
 #include <memory>

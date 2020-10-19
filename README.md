@@ -1,28 +1,7 @@
-XrdPfc refetch and a new plugin XrdOssIntegrity
-===============================================
+XrdOssCsi
+=========
 
-XrdPfc
-======
-
-XrdPfc (Xcache) in branch pgpfc to extend use of pgRead & pgWrite:
-
-The Xcache module has been modified so that pgRead is used to fetch
-data from the origin server in order to cache it. Once XrdCl supports the
-method using pgRead should bring the benefit of the integrity check done
-by the client using per-page CRC values.
-
-Data is passed to the cache's file system along with the per-page checksum
-values by using pgWrite, allowing a file system featuring XRDOSS_HASFSCS
-to store those values without recalculation.
-
-On subsequent read from the cache, errors which indicate checksum mismatch
-will make the cache treat the specific cache-block as missing. It will be fetched
-from the origin server in the usual way for a cache miss.
-
-XrdOssIntegrity
-===============
-
-A stackable Oss plugin that adds the filesystem checksum (XRDOSS_HASFSCS)
+XrdOssCsi is a stackable Oss plugin that adds the filesystem checksum (XRDOSS_HASFSCS)
 feature to an Oss by storing per-page CRC32C values as a separate file.
 Write() and Read() calls update or check against the stored CRC32C values.
 
@@ -33,22 +12,22 @@ e.g. with an Xcache, using 'tags' as the space name for the files
 containing the CRC32C values:
 
 ```
-pfc.osslib ++ /usr/lib64/libXrdOssIntegrity.so nofill space=tags
+pfc.osslib ++ /usr/lib64/libXrdOssCsi.so nofill space=tags
 ```
 
 e.g. on a stanalone server
 
 ```
-ofs.osslib ++ /usr/lib64/libXrdOssIntegrity.so
+ofs.osslib ++ /usr/lib64/libXrdOssCsi.so
 ```
 
 Options
 
 ```
 nofill
-When writing to a point after the current end of file the space between, a hole,
-will contain zeros. Adding the option 'nofill' indicates the XrdOssIntegrity should
-skip writing the page tags with the CRC32C value for the implied zero pages.
+The option 'nofill' indicates the XrdOssCsi should skip writing the page
+tags with the CRC32C value for implied zero pages: When writing to a point
+after the current end of file the space between, a hole, will contain zeros.
 Not filling will result in subsequent reads of the hole pages giving checksum
 errors. Usually this is not what is wanted, unless it is known that hole pages
 should not be read. Partial write of pages implies a read-modify-write, which

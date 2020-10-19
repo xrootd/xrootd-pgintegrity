@@ -1,8 +1,6 @@
-#ifndef _XRDOSSCSICONFIG_H
-#define _XRDOSSCSICONFIG_H
 /******************************************************************************/
 /*                                                                            */
-/*             X r d O s s I n t e g r i t y C o n f i g . h h                */
+/*                   X r d O s s C s i R a n g e s . c c                      */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -31,37 +29,43 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOuc/XrdOucStream.hh"
-#include "XrdOuc/XrdOucEnv.hh"
-#include "XrdSys/XrdSysLogger.hh"
+#include "XrdOssCsiRanges.hh"
+#include "XrdOssCsiPages.hh"
 
-#include <string>
+#include <assert.h>
 
-class XrdOssCsiConfig
+void XrdOssCsiRangeGuard::ReleaseAll()
 {
-public:
+   if (trackinglenlocked_)
+   {
+      unlockTrackinglen();
+   }
 
-  XrdOssCsiConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true) { }
-  ~XrdOssCsiConfig() { }
+   if (r_)
+   {
+      r_->RemoveRange(rp_);
+      r_ = NULL;
+      rp_ = NULL;
+   }
+}
 
-  int Init(XrdSysError &, const char *, const char *, XrdOucEnv *);
+void XrdOssCsiRangeGuard::Wait()
+{
+   assert(r_ != NULL);
+   r_->Wait(rp_);
+}
 
-  bool fillFileHole() const { return fillFileHole_; }
+void XrdOssCsiRangeGuard::unlockTrackinglen()
+{
+   assert(pages_ != NULL);
+   assert(trackinglenlocked_ == true);
 
-  std::string xrdtSpaceName() const { return xrdtSpaceName_; }
+   pages_->TrackedSizeRelease();
+   trackinglenlocked_ = false;
+   pages_ = NULL;
+}
 
-  bool allowMissingTags() const { return allowMissingTags_; }
-
-private:
-  int readConfig(XrdSysError &, const char *);
-
-  int ConfigXeq(char *, XrdOucStream &, XrdSysError &);
-
-  int xtrace(XrdOucStream &, XrdSysError &);
-
-  bool fillFileHole_;
-  std::string xrdtSpaceName_;
-  bool allowMissingTags_;
-};
-
-#endif
+XrdOssCsiRangeGuard::~XrdOssCsiRangeGuard()
+{
+   ReleaseAll();
+}

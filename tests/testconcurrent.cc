@@ -1,7 +1,5 @@
 /******************************************************************************/
 /*                                                                            */
-/*                X r d O s s I n t e g r i t y . c c                         */
-/*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
@@ -111,7 +109,7 @@ protected:
     XrdVERSIONINFODEF(v, "testint", XrdVNUMBER,XrdVERSION);
     XrdOss *ossP = XrdOssDefaultSS(m_logger, config_fn, v);
 
-    m_libp = dlopen("libXrdOssIntegrity-5.so",RTLD_NOW|RTLD_GLOBAL);
+    m_libp = dlopen("libXrdOssCsi-5.so",RTLD_NOW|RTLD_GLOBAL);
     ASSERT_TRUE( m_libp != NULL );
 
     XrdOssAddStorageSystem2_t oss2P=NULL;

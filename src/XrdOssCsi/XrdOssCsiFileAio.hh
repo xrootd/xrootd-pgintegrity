@@ -2,7 +2,7 @@
 #define _XRDOSSCSIFILEAIO_H
 /******************************************************************************/
 /*                                                                            */
-/*           X r d O s s I n t e g r i t y F i l e A i o . h h                */
+/*                 X r d O s s C s i F i l e A i o . h h                      */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -33,7 +33,7 @@
 
 #include "Xrd/XrdScheduler.hh"
 #include "XrdSfs/XrdSfsAio.hh"
-#include "XrdOssIntegrity.hh"
+#include "XrdOssCsi.hh"
 #include "XrdSys/XrdSysPageSize.hh"
 
 #include <mutex>

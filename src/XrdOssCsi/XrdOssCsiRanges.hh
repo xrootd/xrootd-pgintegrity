@@ -2,7 +2,7 @@
 #define _XRDOSSCSIRANGES_H
 /******************************************************************************/
 /*                                                                            */
-/*            X r d O s s I n t e g r i t y R a n g e s . h h                 */
+/*                  X r d O s s C s i R a n g e s . h h                       */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */

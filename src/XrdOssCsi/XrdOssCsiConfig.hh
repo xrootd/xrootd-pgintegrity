@@ -1,8 +1,8 @@
-#ifndef _XRDOSSCSITAGSTORE_H
-#define _XRDOSSCSITAGSTORE_H
+#ifndef _XRDOSSCSICONFIG_H
+#define _XRDOSSCSICONFIG_H
 /******************************************************************************/
 /*                                                                            */
-/*          X r d O s s I n t e g r i t y T a g s t o r e . h h               */
+/*                   X r d O s s C s i C o n f i g . h h                      */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -31,36 +31,37 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOss/XrdOss.hh"
+#include "XrdOuc/XrdOucStream.hh"
+#include "XrdOuc/XrdOucEnv.hh"
+#include "XrdSys/XrdSysLogger.hh"
 
-class XrdOssCsiTagstore
+#include <string>
+
+class XrdOssCsiConfig
 {
 public:
 
-   virtual ~XrdOssCsiTagstore() { }
+  XrdOssCsiConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true) { }
+  ~XrdOssCsiConfig() { }
 
-   virtual int Open(const char *, off_t, int, XrdOucEnv &)=0;
-   virtual int Close()=0;
+  int Init(XrdSysError &, const char *, const char *, XrdOucEnv *);
 
-   virtual void Flush()=0;
-   virtual int Fsync()=0;
+  bool fillFileHole() const { return fillFileHole_; }
 
-   virtual ssize_t WriteTags(const uint32_t *, off_t, size_t)=0;
-   virtual ssize_t ReadTags(uint32_t *, off_t, size_t)=0;
+  std::string xrdtSpaceName() const { return xrdtSpaceName_; }
 
-   virtual off_t GetTrackedTagSize() const=0;
-   virtual off_t GetTrackedDataSize() const=0;
-   virtual bool IsVerified() const=0;
+  bool allowMissingTags() const { return allowMissingTags_; }
 
-   virtual int SetTrackedSize(off_t)=0;
-   virtual int SetUnverified()=0;
-   virtual int ResetSizes(off_t)=0;
-   virtual int Truncate(off_t,bool)=0;
+private:
+  int readConfig(XrdSysError &, const char *);
 
-   // if this flag is set in the header, it indicates the tags
-   // are for verified checksums.
-   // if it is unset it means the tags are unverified
-   static const uint32_t csVer = 0x00000001;
+  int ConfigXeq(char *, XrdOucStream &, XrdSysError &);
+
+  int xtrace(XrdOucStream &, XrdSysError &);
+
+  bool fillFileHole_;
+  std::string xrdtSpaceName_;
+  bool allowMissingTags_;
 };
 
 #endif

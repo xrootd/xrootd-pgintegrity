@@ -1,6 +1,6 @@
 cmake_minimum_required (VERSION 2.6)
 
-project(XrdPfcIntegrity)
+project(XrdOssCsi)
 
 macro( define_default variable value )
   if( NOT DEFINED ${variable} )
@@ -26,12 +26,12 @@ if(BUILD_TEST)
      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
   )
   add_custom_command(TARGET gcov
-     COMMAND rm -f ${CMAKE_BINARY_DIR}/src/CMakeFiles/XrdOssIntegrity-5.dir/XrdOssIntegrity/*.gcda
+     COMMAND rm -f ${CMAKE_BINARY_DIR}/src/CMakeFiles/XrdOssCsi-5.dir/XrdOssCsi/*.gcda
      COMMAND LD_LIBRARY_PATH=./src ./tests/test_page
-     COMMAND gcov ${CMAKE_SOURCE_DIR}/src/XrdOssIntegrity/XrdOssIntegrity*.cc -o ${CMAKE_BINARY_DIR}/src/CMakeFiles/XrdOssIntegrity-5.dir/XrdOssIntegrity
+     COMMAND gcov ${CMAKE_SOURCE_DIR}/src/XrdOssCsi/XrdOssCsi*.cc -o ${CMAKE_BINARY_DIR}/src/CMakeFiles/XrdOssCsi-5.dir/XrdOssCsi
      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
    )
-   add_dependencies(gcov test_page XrdOssIntegrity-5)
+   add_dependencies(gcov test_page XrdOssCsi-5)
 else()
   set(CMAKE_CXX_FLAGS "-O2 -fPIC -Wall -Wextra -Wno-unused-parameter -Wno-long-long -Wnon-virtual-dtor -std=c++0x -g")
 endif()
@@ -43,6 +43,8 @@ execute_process(COMMAND ${CMAKE_C_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VER
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 find_package(XRootD REQUIRED)
+
+link_directories(${XROOTD_LIB_DIR})
 
 add_subdirectory(src)
 

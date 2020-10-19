@@ -1,6 +1,6 @@
 /******************************************************************************/
 /*                                                                            */
-/*             X r d O s s I n t e g r i t y C o n f i g . c c                */
+/*                   X r d O s s C s i C o n f i g . c c                      */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -29,9 +29,9 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOssIntegrityConfig.hh"
+#include "XrdOssCsiConfig.hh"
 #include "XrdOss/XrdOss.hh"
-#include "XrdOssIntegrityTrace.hh"
+#include "XrdOssCsiTrace.hh"
 
 #include <sys/types.h>
 #include <sys/stat.h>

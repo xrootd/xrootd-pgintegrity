@@ -2,7 +2,7 @@
 #define _XRDOSSCSI_H
 /******************************************************************************/
 /*                                                                            */
-/*                   X r d O s s I n t e g r i t y . h h                      */
+/*                         X r d O s s C s i . h h                            */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -33,8 +33,8 @@
 
 #include "Xrd/XrdScheduler.hh"
 #include "XrdOssHandler.hh"
-#include "XrdOssIntegrityConfig.hh"
-#include "XrdOssIntegrityPages.hh"
+#include "XrdOssCsiConfig.hh"
+#include "XrdOssCsiPages.hh"
 
 #include <memory>
 #include <unordered_map>

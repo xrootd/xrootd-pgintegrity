@@ -1,6 +1,6 @@
 /******************************************************************************/
 /*                                                                            */
-/*        X r d O s s I n t e g r i t y T a g s t o r e F i l e . c c         */
+/*              X r d O s s C s i T a g s t o r e F i l e . c c               */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -29,8 +29,8 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOssIntegrityTrace.hh"
-#include "XrdOssIntegrityTagstoreFile.hh"
+#include "XrdOssCsiTrace.hh"
+#include "XrdOssCsiTagstoreFile.hh"
 
 #include <sys/types.h>
 #include <sys/stat.h>

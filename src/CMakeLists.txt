@@ -1,1 +1,1 @@
-include( XrdOssIntegrity )
+include( XrdOssCsi )

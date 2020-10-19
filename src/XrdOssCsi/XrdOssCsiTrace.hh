@@ -1,6 +1,8 @@
+#ifndef _XRDOSSCSI_TRACE_H
+#define _XRDOSSCSI_TRACE_H
 /******************************************************************************/
 /*                                                                            */
-/*             X r d O s s I n t e g r i t y R a n g e s . c c                */
+/*                    X r d O s s C s i T r a c e . h h                       */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -29,43 +31,39 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOssIntegrityRanges.hh"
-#include "XrdOssIntegrityPages.hh"
+#include "XrdOuc/XrdOucTrace.hh"
 
-#include <assert.h>
+// Trace flags
+//
+#define TRACE_ALL       0x0fff
+#define TRACE_Warn      0x0001
+#define TRACE_Debug     0x0800
 
-void XrdOssCsiRangeGuard::ReleaseAll()
-{
-   if (trackinglenlocked_)
-   {
-      unlockTrackinglen();
-   }
+#ifndef NODEBUG
 
-   if (r_)
-   {
-      r_->RemoveRange(rp_);
-      r_ = NULL;
-      rp_ = NULL;
-   }
-}
+#include "XrdSys/XrdSysHeaders.hh"
 
-void XrdOssCsiRangeGuard::Wait()
-{
-   assert(r_ != NULL);
-   r_->Wait(rp_);
-}
+#define QTRACE(act) OssCsiTrace.What & TRACE_ ## act
 
-void XrdOssCsiRangeGuard::unlockTrackinglen()
-{
-   assert(pages_ != NULL);
-   assert(trackinglenlocked_ == true);
+#define TRACE(act, x) \
+        if (QTRACE(act)) \
+           {OssCsiTrace.Beg(epname,tident_.c_str()); cerr <<x; OssCsiTrace.End();}
 
-   pages_->TrackedSizeRelease();
-   trackinglenlocked_ = false;
-   pages_ = NULL;
-}
+#define TRACEReturn(type, ecode, msg) \
+               {TRACE(type, "err " <<ecode <<msg); return ecode;}
 
-XrdOssCsiRangeGuard::~XrdOssCsiRangeGuard()
-{
-   ReleaseAll();
-}
+#define DEBUG(y) if (QTRACE(Debug)) \
+                    {OssCsiTrace.Beg(epname); cerr <<y; OssCsiTrace.End();}
+
+#define EPNAME(x) static const char *epname = x;
+
+#else
+
+#define DEBUG(x)
+#define QTRACE(x) 0
+#define TRACE(x, y)
+#define TRACEReturn(type, ecode, msg) return ecode
+#define EPNAME(x)
+
+#endif
+#endif

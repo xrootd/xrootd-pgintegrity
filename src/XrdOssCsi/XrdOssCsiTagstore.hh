@@ -1,13 +1,10 @@
-#ifndef _XRDOSSCSI_TRACE_H
-#define _XRDOSSCSI_TRACE_H
+#ifndef _XRDOSSCSITAGSTORE_H
+#define _XRDOSSCSITAGSTORE_H
 /******************************************************************************/
 /*                                                                            */
-/*                        X r d O s s T r a c e . h h                         */
+/*                X r d O s s C s i T a g s t o r e . h h                     */
 /*                                                                            */
-/* (C) 2003 by the Board of Trustees of the Leland Stanford, Jr., University  */
-/*                            All Rights Reserved                             */
-/*   Produced by Andrew Hanushevsky for Stanford University under contract    */
-/*                DE-AC02-76-SFO0515 with the Deprtment of Energy             */
+/* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -15,6 +12,10 @@
 /* the terms of the GNU Lesser General Public License as published by the     */
 /* Free Software Foundation, either version 3 of the License, or (at your     */
 /* option) any later version.                                                 */
+/*                                                                            */
+/* In applying this licence, CERN does not waive the privileges and           */
+/* immunities granted to it by virtue of its status as an Intergovernmental   */
+/* Organization or submit itself to any jurisdiction.                         */
 /*                                                                            */
 /* XRootD is distributed in the hope that it will be useful, but WITHOUT      */
 /* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or      */
@@ -30,39 +31,36 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOuc/XrdOucTrace.hh"
+#include "XrdOss/XrdOss.hh"
 
-// Trace flags
-//
-#define TRACE_ALL       0x0fff
-#define TRACE_Warn      0x0001
-#define TRACE_Debug     0x0800
+class XrdOssCsiTagstore
+{
+public:
 
-#ifndef NODEBUG
+   virtual ~XrdOssCsiTagstore() { }
 
-#include "XrdSys/XrdSysHeaders.hh"
+   virtual int Open(const char *, off_t, int, XrdOucEnv &)=0;
+   virtual int Close()=0;
 
-#define QTRACE(act) OssCsiTrace.What & TRACE_ ## act
+   virtual void Flush()=0;
+   virtual int Fsync()=0;
 
-#define TRACE(act, x) \
-        if (QTRACE(act)) \
-           {OssCsiTrace.Beg(epname,tident_.c_str()); cerr <<x; OssCsiTrace.End();}
+   virtual ssize_t WriteTags(const uint32_t *, off_t, size_t)=0;
+   virtual ssize_t ReadTags(uint32_t *, off_t, size_t)=0;
 
-#define TRACEReturn(type, ecode, msg) \
-               {TRACE(type, "err " <<ecode <<msg); return ecode;}
+   virtual off_t GetTrackedTagSize() const=0;
+   virtual off_t GetTrackedDataSize() const=0;
+   virtual bool IsVerified() const=0;
 
-#define DEBUG(y) if (QTRACE(Debug)) \
-                    {OssCsiTrace.Beg(epname); cerr <<y; OssCsiTrace.End();}
+   virtual int SetTrackedSize(off_t)=0;
+   virtual int SetUnverified()=0;
+   virtual int ResetSizes(off_t)=0;
+   virtual int Truncate(off_t,bool)=0;
 
-#define EPNAME(x) static const char *epname = x;
+   // if this flag is set in the header, it indicates the tags
+   // are for verified checksums.
+   // if it is unset it means the tags are unverified
+   static const uint32_t csVer = 0x00000001;
+};
 
-#else
-
-#define DEBUG(x)
-#define QTRACE(x) 0
-#define TRACE(x, y)
-#define TRACEReturn(type, ecode, msg) return ecode
-#define EPNAME(x)
-
-#endif
 #endif

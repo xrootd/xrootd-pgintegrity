@@ -1,6 +1,6 @@
 /******************************************************************************/
 /*                                                                            */
-/*           X r d O s s I n t e g r i t y F i l e A i o . c c                */
+/*                 X r d O s s C s i F i l e A i o . c c                      */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -29,10 +29,10 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOssIntegrityTrace.hh"
-#include "XrdOssIntegrity.hh"
-#include "XrdOssIntegrityPages.hh"
-#include "XrdOssIntegrityFileAio.hh"
+#include "XrdOssCsiTrace.hh"
+#include "XrdOssCsi.hh"
+#include "XrdOssCsiPages.hh"
+#include "XrdOssCsiFileAio.hh"
 #include "XrdOuc/XrdOucCRC.hh"
 
 #include <string>

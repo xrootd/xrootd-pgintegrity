@@ -2,7 +2,7 @@
 #define _XRDOSSCSIPAGES_H
 /******************************************************************************/
 /*                                                                            */
-/*              X r d O s s I n t e g r i t y P a g e s . h h                 */
+/*                    X r d O s s C s i P a g e s . h h                       */
 /*                                                                            */
 /* (C) Copyright 2020 CERN.                                                   */
 /*                                                                            */
@@ -33,8 +33,8 @@
 
 #include "XrdSys/XrdSysPthread.hh"
 
-#include "XrdOssIntegrityTagstore.hh"
-#include "XrdOssIntegrityRanges.hh"
+#include "XrdOssCsiTagstore.hh"
+#include "XrdOssCsiRanges.hh"
 #include <memory>
 #include <mutex>
 #include <utility>
