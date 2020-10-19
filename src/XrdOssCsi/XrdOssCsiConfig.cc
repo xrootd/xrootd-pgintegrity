@@ -82,7 +82,7 @@ int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char
    Eroute.Say("       compute file holes: ", fillFileHole_ ? "yes" : "no");
    Eroute.Say("       space: ", xrdtSpaceName_.c_str());
    Eroute.Say("       allow files without CRCs: ", allowMissingTags_ ? "yes" : "no");
-   Eroute.Say("       trace level: ", std::to_string(OssCsiTrace.What).c_str());
+   Eroute.Say("       trace level: ", std::to_string((long long int)OssCsiTrace.What).c_str());
 
    Eroute.Say("++++++ OssCsi plugin initialization completed.");
 
