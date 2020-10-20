@@ -218,7 +218,7 @@ int XrdOssCsi::Truncate(const char *path, unsigned long long size, XrdOucEnv *en
 
    std::unique_ptr<XrdOssDF> fp(newFile("xrdt"));
    XrdOucEnv   myEnv;
-   int ret = fp->Open(path, O_RDWR, 0600, myEnv);
+   int ret = fp->Open(path, O_RDWR, 0600, envP ? *envP : myEnv);
    if (ret != XrdOssOK)
    {
       return ret;

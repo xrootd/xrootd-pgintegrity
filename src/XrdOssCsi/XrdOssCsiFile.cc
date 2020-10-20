@@ -161,12 +161,9 @@ int XrdOssCsiFile::pageAndFileOpen(const char *fn, const int dflags, const int O
       {
          return XrdOssOK;
       }
-   }
 
-   // failed to open the datafile or create the page object.
-   // close datafile if needed
-   if (dataret == XrdOssOK)
-   {
+      // failed to open the datafile or create the page object.
+      // close datafile if needed
       (void) successor_->Close();
    }
 
@@ -203,7 +200,12 @@ int XrdOssCsiFile::Close(long long *retsz)
 
 int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
 {
-   XrdOucEnv newEnv;
+   // for tagfile open, start with copy of datafile environment
+   int infolen;
+   const char *info = Env.Env(infolen);
+   XrdOucEnv newEnv(info, infolen, Env.secEnv());
+
+   // give space name for tag files
    newEnv.Put("oss.cgroup", config_.xrdtSpaceName().c_str());
 
    char *tmp;
@@ -218,6 +220,10 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
       char size_str[32];
       sprintf(size_str, "%lld", 20+4*((cgSize+XrdSys::PageSize-1)/XrdSys::PageSize));
       newEnv.Put("oss.asize",  size_str);
+   }
+   else
+   {
+      newEnv.Put("oss.asize",  "0");
    }
 
    // get information about data file

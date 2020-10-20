@@ -33,6 +33,11 @@
 
 #include "XrdOss/XrdOss.hh"
 
+// XrdOssHandler
+//
+// Chain-of-responsibility pattern
+//
+
 class XrdOssDFHandler : public XrdOssDF {
 public:
                 // Directory oriented methods

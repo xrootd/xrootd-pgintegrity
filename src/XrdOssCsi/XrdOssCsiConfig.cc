@@ -45,7 +45,7 @@ extern XrdOucTrace  OssCsiTrace;
 
 #define TS_Xeq(x,m)    if (!strcmp(x,var)) return m(Config, Eroute);
 
-int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char *parms, XrdOucEnv *envP)
+int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char *parms, XrdOucEnv *)
 {
    Eroute.Say("++++++ OssCsi plugin, for file verification with CRCs, initialization started.");
 

@@ -345,7 +345,7 @@ ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *con
    {
       const size_t bavail = std::min(trackinglen - (XrdSys::PageSize*p2), (off_t)XrdSys::PageSize);
       uint8_t b[XrdSys::PageSize];
-      ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p2, bavail);
+      rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p2, bavail);
       if (rret<0) return rret;
       const uint8_t *const p = (uint8_t*)buff;
       if (memcmp(&p[blen-p2_off], b, p2_off))
