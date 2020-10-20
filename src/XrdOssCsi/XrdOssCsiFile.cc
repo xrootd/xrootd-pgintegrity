@@ -141,11 +141,10 @@ int XrdOssCsiFile::pageAndFileOpen(const char *fn, const int dflags, const int O
 
    if ((dflags & O_TRUNC) && pmi_->pages)
    {
-      // asked to truncate but the file is already open: becomes difficult to sync.
-      // So, return error
+      // truncate of already open file at open() not supported
       mapRelease(pmi_, &lck);
       pmi_.reset();
-      return -ETXTBSY;
+      return -EDEADLK;
    }
 
    const int dataret = successor_->Open(pmi_->dpath.c_str(), dflags, Mode, Env);

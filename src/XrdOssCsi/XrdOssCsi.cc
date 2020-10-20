@@ -269,13 +269,25 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
 
    if (isTrunc && pmi->pages)
    {
-      // asked to truncate but the file is already open: becomes difficult to sync.
-      // So, return error
+      // truncate of already open file at open() not supported
       XrdOssCsiFile::mapRelease(pmi, &lck);
-      return -ETXTBSY;
+      return -EDEADLK;
    }
 
-   const int ret = successor_->Create(tident, path, access_mode, env, Opts);
+   int ret = successor_->Create(tident, path, access_mode, env, Opts);
+   if (ret == XrdOssOK && isTrunc)
+   {
+      // If create did truncate make sure the tag file is also truncated now.
+      // Subsequently the user may not give O_TRUNC when opening the file,
+      // possibly leaving a tag file with old content. If file was created without
+      // truncate it will be zero length and open() will create the tag file.
+
+      const std::string tpath = std::string(path) + ".xrdt";
+      const int flags = O_RDWR|O_CREAT|O_TRUNC;
+      const int cropts = XRDOSS_mkpath;
+      ret = successor_->Create(tident, tpath.c_str(), 0600, env, (flags<<8)|cropts);
+   }
+
    XrdOssCsiFile::mapRelease(pmi, &lck);
 
    return ret;
