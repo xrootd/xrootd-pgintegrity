@@ -167,8 +167,8 @@ private:
 class XrdOssCsi : public XrdOssHandler
 {
 public:
-virtual XrdOssDF *newDir(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssCsiDir(successor_, tident, config_); }
-virtual XrdOssDF *newFile(const char *tident) /* override */ { return (XrdOssDF *)new XrdOssCsiFile(successor_, tident, config_); }
+virtual XrdOssDF *newDir(const char *tident) /* override */;
+virtual XrdOssDF *newFile(const char *tident) /* override */;
 
 virtual int       Init(XrdSysLogger *lp, const char *cfn) /* override */ { return Init(lp, cfn, 0, 0); }
 virtual int       Init(XrdSysLogger *lp, const char *cfn, XrdOucEnv *envP) /* override */ { return Init(lp, cfn, 0, envP); }

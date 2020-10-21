@@ -65,6 +65,28 @@ int XrdOssCsiDir::Readdir(char *buff, int blen)
    return ret;
 }
 
+XrdOssDF *XrdOssCsi::newDir(const char *tident)
+{
+   // tident starting with '*' is a special case to bypass OssCsi
+   if (tident && *tident == '*')
+   {
+      return successor_->newDir(tident);
+   }
+
+   return (XrdOssDF *)new XrdOssCsiDir(successor_, tident, config_);
+}
+
+XrdOssDF *XrdOssCsi::newFile(const char *tident)
+{
+   // tident starting with '*' is a special case to bypass OssCsi
+   if (tident && *tident == '*')
+   {
+      return successor_->newFile(tident);
+   }
+
+   return (XrdOssDF *)new XrdOssCsiFile(successor_, tident, config_);
+}
+
 int XrdOssCsi::Init(XrdSysLogger *lP, const char *cP, const char *params, XrdOucEnv *env)
 {
    OssCsiEroute.logger(lP);
@@ -252,6 +274,12 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
                       XrdOucEnv &env, int Opts)
 {
    if (isTagFile(path)) return -EPERM;
+
+   // tident starting with '*' is a special case to bypass OssCsi
+   if (tident && *tident == '*')
+   {
+      return successor_->Create(tident, path, access_mode, env, Opts);
+   }
 
    // get mapinfo entries for file
    std::shared_ptr<XrdOssCsiFile::puMapItem_t> pmi;
