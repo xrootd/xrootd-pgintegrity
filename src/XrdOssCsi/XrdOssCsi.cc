@@ -33,6 +33,8 @@
 #include "XrdOssCsi.hh"
 #include "XrdOssCsiConfig.hh"
 #include "XrdOuc/XrdOucEnv.hh"
+#include "XrdSys/XrdSysPageSize.hh"
+#include "XrdOuc/XrdOuca2x.hh"
 #include "XrdVersion.hh"
 
 #include <string>
@@ -266,6 +268,7 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
    }
 
    const bool isTrunc = ((Opts>>8)&O_TRUNC) ? true : false;
+   const bool isExcl = (Opts&XRDOSS_new) ? true : false;
 
    if (isTrunc && pmi->pages)
    {
@@ -274,23 +277,28 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
       return -EDEADLK;
    }
 
-   int ret = successor_->Create(tident, path, access_mode, env, Opts);
-   if (ret == XrdOssOK && isTrunc)
+   // create file: require it not to exist (unless we're truncating)
+   // so that we don't create a new tagfile for an existing file
+
+   int ret = successor_->Create(tident, path, access_mode, env, Opts | (isTrunc ? 0 : XRDOSS_new));
+   if (ret == XrdOssOK)
    {
-      // If create did truncate make sure the tag file is also truncated now.
-      // Subsequently the user may not give O_TRUNC when opening the file,
-      // possibly leaving a tag file with old content. If file was created without
-      // truncate it will be zero length and open() will create the tag file.
+      // Try to create and truncate the tag file now, since the datafile
+      // must either be newly created or has been truncated.
 
       const std::string tpath = std::string(path) + ".xrdt";
       const int flags = O_RDWR|O_CREAT|O_TRUNC;
       const int cropts = XRDOSS_mkpath;
-      ret = successor_->Create(tident, tpath.c_str(), 0600, env, (flags<<8)|cropts);
+
+      std::unique_ptr<XrdOucEnv> tagEnv = tagOpenEnv(config_, env);
+
+      ret = successor_->Create(tident, tpath.c_str(), 0600, *tagEnv, (flags<<8)|cropts);
    }
 
    XrdOssCsiFile::mapRelease(pmi, &lck);
 
-   return ret;
+   // may not need to return EEXIST
+   return (ret==-EEXIST && !isExcl) ? XrdOssOK : ret;
 }
 
 int XrdOssCsi::Chmod(const char *path, mode_t mode, XrdOucEnv *envP)
@@ -362,4 +370,35 @@ XrdOss *XrdOssAddStorageSystem2(XrdOss       *curr_oss,
       return NULL;
    }
    return (XrdOss*)myOss;
+}
+
+std::unique_ptr<XrdOucEnv> XrdOssCsi::tagOpenEnv(const XrdOssCsiConfig &config, XrdOucEnv &env)
+{
+   // for tagfile open, start with copy of datafile environment
+   int infolen;
+   const char *info = env.Env(infolen);
+   std::unique_ptr<XrdOucEnv> newEnv(new XrdOucEnv(info, infolen, env.secEnv()));
+
+   // give space name for tag files
+   newEnv->Put("oss.cgroup", config.xrdtSpaceName().c_str());
+
+   char *tmp;
+   long long cgSize=0;
+   if ((tmp = env.Get("oss.asize")) && XrdOuca2x::a2sz(OssCsiEroute,"invalid asize",tmp,&cgSize,0))
+   {
+      cgSize=0;
+   }
+
+   if (cgSize>0)
+   {
+      char size_str[32];
+      sprintf(size_str, "%lld", 20+4*((cgSize+XrdSys::PageSize-1)/XrdSys::PageSize));
+      newEnv->Put("oss.asize",  size_str);
+   }
+   else
+   {
+      newEnv->Put("oss.asize",  "0");
+   }
+
+   return newEnv;
 }

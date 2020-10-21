@@ -204,6 +204,8 @@ virtual        ~XrdOssCsi() { }
       return false;
    }
 
+   static std::unique_ptr<XrdOucEnv> tagOpenEnv(const XrdOssCsiConfig &, XrdOucEnv &);
+
    static XrdScheduler *Sched_;
 
 private:

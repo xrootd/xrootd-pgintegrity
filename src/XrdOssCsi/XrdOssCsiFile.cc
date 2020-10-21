@@ -36,7 +36,6 @@
 #include "XrdOssCsiRanges.hh"
 #include "XrdOuc/XrdOucCRC.hh"
 #include "XrdOuc/XrdOucEnv.hh"
-#include "XrdOuc/XrdOuca2x.hh"
 #include "XrdSfs/XrdSfsAio.hh"
 #include "XrdSys/XrdSysPageSize.hh"
 #include "XrdVersion.hh"
@@ -200,31 +199,7 @@ int XrdOssCsiFile::Close(long long *retsz)
 
 int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
 {
-   // for tagfile open, start with copy of datafile environment
-   int infolen;
-   const char *info = Env.Env(infolen);
-   XrdOucEnv newEnv(info, infolen, Env.secEnv());
-
-   // give space name for tag files
-   newEnv.Put("oss.cgroup", config_.xrdtSpaceName().c_str());
-
-   char *tmp;
-   long long cgSize=0;
-   if ((tmp = Env.Get("oss.asize")) && XrdOuca2x::a2sz(OssCsiEroute,"invalid asize",tmp,&cgSize,0))
-   {
-      cgSize=0;
-   }
-
-   if (cgSize>0)
-   {
-      char size_str[32];
-      sprintf(size_str, "%lld", 20+4*((cgSize+XrdSys::PageSize-1)/XrdSys::PageSize));
-      newEnv.Put("oss.asize",  size_str);
-   }
-   else
-   {
-      newEnv.Put("oss.asize",  "0");
-   }
+   std::unique_ptr<XrdOucEnv> tagEnv = XrdOssCsi::tagOpenEnv(config_, Env);
 
    // get information about data file
    struct stat sb;
@@ -239,37 +214,32 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    // (some of which may be RDWR, some RDONLY)
    int tagFlags = O_RDWR;
 
-   // if data file was truncated do same to tag file and let it be recreated for empty data file
+   // data file was truncated, do same to tag file and let it be reset
    if ((Oflag & O_TRUNC)) tagFlags |= O_TRUNC;
 
-   // If the datafile is new, should try to create tag file.
-   // If O_CREAT|O_EXCL was given datafile is new, or if datasize is zero also try to create
-   if (((Oflag & O_CREAT) && (Oflag & O_EXCL)) || sb.st_size==0)
+   // The concern with creating a new tag file is that the data file may already exist
+   // without a tag file.
+   // Creating a new empty tag file in this situation will make errors, whereas with it
+   // missing it may be acceptable, depending on the configuration.
+   // Therefore:
+   // If O_CREAT is given along with O_EXCL the datafile must be new so it is ok to make a tag.
+   // If O_CREAT is given and the data file length is zero also try to create the tag.
+   if ((Oflag & O_CREAT) && ((Oflag & O_EXCL) || sb.st_size == 0))
    {
       tagFlags |= O_CREAT;
-   }
-
-   if ((tagFlags & O_CREAT))
-   {
-      const int crOpts = XRDOSS_mkpath;
-      const int ret = parentOss_->Create(tident, pmi_->tpath.c_str(), 0600, newEnv, (tagFlags<<8)|crOpts);
-      if (ret != XrdOssOK && ret != -ENOTSUP && ret != -EROFS)
-      {
-         return ret;
-      }
    }
 
    std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident));
    std::unique_ptr<XrdOssCsiTagstore> ts(new XrdOssCsiTagstoreFile(pmi_->dpath, std::move(integFile), tident));
    std::unique_ptr<XrdOssCsiPages> pages(new XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), tident));
 
-   int puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, tagFlags, newEnv);
+   int puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, tagFlags, *tagEnv);
    if (puret<0)
    {
       if (puret == -EROFS && rdonly_)
       {
          // try to open tag file readonly
-         puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, O_RDONLY, newEnv);
+         puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, O_RDONLY, *tagEnv);
       }
    }
 

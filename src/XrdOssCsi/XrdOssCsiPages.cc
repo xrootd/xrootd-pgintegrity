@@ -317,7 +317,7 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
    return nblkwritten;
 }
 
-ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &, uint32_t *const csvec, const uint64_t opts)
+ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t & /* sizes */, uint32_t *const csvec, const uint64_t opts)
 {
    EPNAME("FetchRangeAligned");
    if (csvec == NULL && !(opts & XrdOssDF::Verify))
@@ -535,7 +535,7 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
 }
 
 ssize_t XrdOssCsiPages::FetchRange(
-   XrdOssDF *, const void *buff, const off_t offset, const size_t blen,
+   XrdOssDF *const /* fd */, const void *buff, const off_t offset, const size_t blen,
    uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
 {
    EPNAME("FetchRange");
@@ -586,7 +586,7 @@ ssize_t XrdOssCsiPages::FetchRange(
    return FetchRangeAligned(buff,offset,blen,sizes,csvec,opts);
 }
 
-int XrdOssCsiPages::StoreRange(XrdOssDF *, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
+int XrdOssCsiPages::StoreRange(XrdOssDF *const /* fd */, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
 {
    if (offset<0)
    {
