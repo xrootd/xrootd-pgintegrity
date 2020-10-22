@@ -67,7 +67,7 @@ protected:
 
     ASSERT_TRUE( oss2P != NULL );
 
-    m_oss = oss2P(ossP, m_logger, config_fn, "", &m_env);
+    m_oss = oss2P(ossP, m_logger, config_fn, "prefix=", &m_env);
     ASSERT_TRUE(m_oss != NULL );
 
     m_file = m_oss->newFile("mytesttid");

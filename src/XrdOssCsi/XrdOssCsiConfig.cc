@@ -47,7 +47,8 @@ extern XrdOucTrace  OssCsiTrace;
 
 int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char *parms, XrdOucEnv * /* envP */)
 {
-   Eroute.Say("++++++ OssCsi plugin, for file verification with CRCs, initialization started.");
+   int NoGo = XrdOssOK;
+   Eroute.Say("++++++ OssCsi plugin initialization started.");
 
    std::stringstream ss(parms ? parms : "");
    std::string item;
@@ -73,16 +74,23 @@ int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char
       {
          allowMissingTags_ = false;
       }
+      else if (item == "prefix")
+      {
+         if (tagParam_.SetPrefix(Eroute, value)) NoGo = 1;
+      }
    }
+
+   if (NoGo) return NoGo;
 
    OssCsiTrace.What = TRACE_Warn;
    if (getenv("XRDDEBUG")) OssCsiTrace.What = TRACE_ALL;
-   readConfig(Eroute, config_fn);
+   if (readConfig(Eroute, config_fn)) return 1;
 
    Eroute.Say("       compute file holes: ", fillFileHole_ ? "yes" : "no");
-   Eroute.Say("       space: ", xrdtSpaceName_.c_str());
+   Eroute.Say("       space name: ", xrdtSpaceName_.c_str());
    Eroute.Say("       allow files without CRCs: ", allowMissingTags_ ? "yes" : "no");
    Eroute.Say("       trace level: ", std::to_string((long long int)OssCsiTrace.What).c_str());
+   Eroute.Say("       prefix: ", tagParam_.prefix_.empty() ? "[empty]" : tagParam_.prefix_.c_str());
 
    Eroute.Say("++++++ OssCsi plugin initialization completed.");
 

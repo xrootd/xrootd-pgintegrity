@@ -31,11 +31,109 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "XrdOss/XrdOss.hh"
 #include "XrdOuc/XrdOucStream.hh"
 #include "XrdOuc/XrdOucEnv.hh"
 #include "XrdSys/XrdSysLogger.hh"
 
 #include <string>
+
+class TagPath
+{
+public:
+
+   TagPath() : prefix_("/.xrdt"), suffix_(".xrdt") { calcPrefixElements(); }
+   ~TagPath() { }
+
+   bool isTagFile(const char *path)
+   {
+      if (!path || !*path) return false;
+      const std::string s(path);
+      // if prefix_ set, the test is to match if "path" is equal to or a subpath of perfix_
+      if (!prefix_.empty())
+      {
+         if (s.find(prefix_) == 0)
+         {
+            if (prefix_.length() == s.length()) return true;
+            if (s[prefix_.length()] == '/') return true;
+         }
+         return false;
+      }
+      // prefix_ not set, test is if "path" ends with suffix_
+      const size_t haystack = s.length();
+      const size_t needle = suffix_.length();
+      if (haystack >= needle && s.substr(haystack-needle, std::string::npos) == suffix_) return true;
+      return false;
+   }
+
+   int SetPrefix(XrdSysError &Eroute, const std::string &v)
+   { 
+      prefix_ = v;
+      prefixstart_.clear();
+      prefixend_.clear();
+      if (prefix_.empty()) return XrdOssOK;
+
+      if (v[0] != '/')
+      {
+         Eroute.Emsg("Config","prefix must be empty or start with /");
+         return 1;
+      }
+      if (v[v.length()-1] == '/')
+      {
+         Eroute.Emsg("Config","prefix must not end with /");
+         return 1;
+      }
+      calcPrefixElements();
+      return XrdOssOK;
+   }
+
+   bool hasPrefix() { return !prefix_.empty(); }
+
+   std::string makeBaseDir(const char *path)
+   {
+      if (!path || !*path || prefix_.empty()) return std::string();
+      std::string p(path);
+      while(p.length()>0 && p[p.length()-1] == '/') p.erase( p.end()-1 );
+      return prefix_ + p;
+   }
+
+   bool matchPrefixDir(const char *path)
+   {
+      if (!path || !*path) return false;
+      std::string p(path);
+      while(p.length()>1 && p[p.length()-1] == '/') p.erase( p.end()-1 );
+      if (prefixstart_ == p) return true;
+      return false;
+   }
+
+   std::string getPrefixName()
+   {
+      return prefixend_;
+   }
+
+   std::string makeTagFilename(const char *path)
+   {
+      if (!path || !*path) return std::string();
+      std::string p(path);
+      while(p.length()>1 && p[p.length()-1] == '/') p.erase( p.end()-1 );
+      return prefix_ + p + suffix_;
+   }
+
+   std::string prefix_;
+
+private:
+   void calcPrefixElements()
+   {
+      const size_t idx = prefix_.rfind("/");
+      prefixstart_ = prefix_.substr(0,idx);
+      if (prefixstart_.empty()) prefixstart_="/";
+      prefixend_ = prefix_.substr(idx+1,std::string::npos);
+   }
+      
+   std::string prefixstart_;
+   std::string prefixend_;
+   std::string suffix_;
+};
 
 class XrdOssCsiConfig
 {
@@ -51,6 +149,8 @@ public:
   std::string xrdtSpaceName() const { return xrdtSpaceName_; }
 
   bool allowMissingTags() const { return allowMissingTags_; }
+
+  TagPath tagParam_;
 
 private:
   int readConfig(XrdSysError &, const char *);

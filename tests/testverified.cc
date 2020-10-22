@@ -86,8 +86,8 @@ protected:
 
   void openplugin(bool allowmissing) {
     const char *config_fn = NULL;
-    std::string params = "";
-    if (!allowmissing) params += "nomissing";
+    std::string params = "prefix=";
+    if (!allowmissing) params += " nomissing";
 
     m_logger = new XrdSysLogger(m_fdnull,0);
 

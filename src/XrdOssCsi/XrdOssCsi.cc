@@ -53,6 +53,22 @@ XrdOucTrace OssCsiTrace(&OssCsiEroute);
 
 XrdScheduler *XrdOssCsi::Sched_;
 
+int XrdOssCsiDir::Opendir(const char *path, XrdOucEnv &env)
+{
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
+
+   skipsuffix_ = !config_.tagParam_.hasPrefix();
+   if (!skipsuffix_)
+   {
+      skipprefix_ = config_.tagParam_.matchPrefixDir(path);
+      if (skipprefix_)
+      {
+         skipprefixname_ = config_.tagParam_.getPrefixName();
+      }
+   }
+   return successor_->Opendir(path, env);
+}
+
 // skip tag files in directory listing
 int XrdOssCsiDir::Readdir(char *buff, int blen)
 {
@@ -61,7 +77,16 @@ int XrdOssCsiDir::Readdir(char *buff, int blen)
    {
       ret = successor_->Readdir(buff, blen);
       if (ret<0) return ret;
-   } while(XrdOssCsi::isTagFile(buff));
+      if (skipsuffix_)
+      {
+         if (config_.tagParam_.isTagFile(buff)) continue;
+      }
+      else if (skipprefix_)
+      {
+         if (skipprefixname_ == buff) continue;
+      }
+      break;
+   } while(1);
    return ret;
 }
 
@@ -109,12 +134,12 @@ int XrdOssCsi::Init(XrdSysLogger *lP, const char *cP, const char *params, XrdOuc
 
 int XrdOssCsi::Unlink(const char *path, int Opts, XrdOucEnv *eP)
 {
-   if (isTagFile(path)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
 
    // get mapinfo entries for file
    std::shared_ptr<XrdOssCsiFile::puMapItem_t> pmi;
    {
-      const std::string tpath = std::string(path) + ".xrdt";
+      const std::string tpath = config_.tagParam_.makeTagFilename(path);
       XrdOssCsiFile::mapTake(tpath, pmi);
    }
 
@@ -143,13 +168,10 @@ int XrdOssCsi::Unlink(const char *path, int Opts, XrdOucEnv *eP)
 int XrdOssCsi::Rename(const char *oldname, const char *newname,
                       XrdOucEnv  *old_env, XrdOucEnv  *new_env)
 {
-   if (isTagFile(oldname) || isTagFile(newname)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(oldname) || config_.tagParam_.isTagFile(newname)) return -ENOENT;
 
-   std::string inew(newname);
-   inew += ".xrdt";
-
-   std::string iold(oldname);
-   iold += ".xrdt";
+   const std::string inew = config_.tagParam_.makeTagFilename(newname);
+   const std::string iold = config_.tagParam_.makeTagFilename(oldname);
 
    // get mapinfo entries for both old and possibly existing newfile
    std::shared_ptr<XrdOssCsiFile::puMapItem_t> newpmi,pmi;
@@ -193,13 +215,23 @@ int XrdOssCsi::Rename(const char *oldname, const char *newname,
       return sret;
    }
 
+   const int opts = ((O_RDWR|O_CREAT|O_EXCL)<<8) | XRDOSS_mkpath | XRDOSS_new;
+   XrdOucEnv myEnv;
+   const int cret = successor_->Create("xrdt", inew.c_str(), 0600, new_env ? *new_env : myEnv, opts);
+   if (cret != XrdOssOK && cret != -EEXIST)
+   {
+      (void) successor_->Rename(newname, oldname, new_env, old_env);
+      XrdOssCsiFile::mapRelease(pmi,&lck2);
+      XrdOssCsiFile::mapRelease(newpmi,&lck);
+      return cret;
+   }
+
    const int iret = successor_->Rename(iold.c_str(), inew.c_str(), old_env, new_env);
    if (iret<0)
    {
       if (iret == -ENOENT)
       {
-         // if there is no tag file for oldfile, but newfile existed previously with a tag file,
-         // we don't want to be left with the previously existing tagfile
+         // if there is no tag file for oldfile, delete new tag
          (void) successor_->Unlink(inew.c_str(), 0, new_env);
       }
       else
@@ -238,7 +270,7 @@ int XrdOssCsi::Rename(const char *oldname, const char *newname,
 
 int XrdOssCsi::Truncate(const char *path, unsigned long long size, XrdOucEnv *envP)
 {
-   if (isTagFile(path)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
 
    std::unique_ptr<XrdOssDF> fp(newFile("xrdt"));
    XrdOucEnv   myEnv;
@@ -260,20 +292,20 @@ int XrdOssCsi::Truncate(const char *path, unsigned long long size, XrdOucEnv *en
 int XrdOssCsi::Reloc(const char *tident, const char *path,
                      const char *cgName, const char *anchor)
 {
-   if (isTagFile(path)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
    return successor_->Reloc(tident, path, cgName, anchor);
 }
 
 int XrdOssCsi::Mkdir(const char *path, mode_t mode, int mkpath, XrdOucEnv *envP)
 {
-   if (isTagFile(path)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(path)) return -EACCES;
    return successor_->Mkdir(path, mode, mkpath, envP);
 }
 
 int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
                       XrdOucEnv &env, int Opts)
 {
-   if (isTagFile(path)) return -EPERM;
+   if (config_.tagParam_.isTagFile(path)) return -EACCES;
 
    // tident starting with '*' is a special case to bypass OssCsi
    if (tident && *tident == '*')
@@ -284,7 +316,7 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
    // get mapinfo entries for file
    std::shared_ptr<XrdOssCsiFile::puMapItem_t> pmi;
    {
-      const std::string tpath = std::string(path) + ".xrdt";
+      const std::string tpath = config_.tagParam_.makeTagFilename(path);
       XrdOssCsiFile::mapTake(tpath, pmi);
    }
 
@@ -296,7 +328,7 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
    }
 
    const bool isTrunc = ((Opts>>8)&O_TRUNC) ? true : false;
-   const bool isExcl = (Opts&XRDOSS_new) ? true : false;
+   const bool isExcl = ((Opts&XRDOSS_new) || ((Opts>>8)&O_EXCL)) ? true : false;
 
    if (isTrunc && pmi->pages)
    {
@@ -308,13 +340,15 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
    // create file: require it not to exist (unless we're truncating)
    // so that we don't create a new tagfile for an existing file
 
-   int ret = successor_->Create(tident, path, access_mode, env, Opts | (isTrunc ? 0 : XRDOSS_new));
+   const int exflags = isTrunc ? 0 : ((O_EXCL<<8)|XRDOSS_new);
+
+   int ret = successor_->Create(tident, path, access_mode, env, Opts | exflags);
    if (ret == XrdOssOK)
    {
       // Try to create and truncate the tag file now, since the datafile
       // must either be newly created or has been truncated.
 
-      const std::string tpath = std::string(path) + ".xrdt";
+      const std::string tpath = config_.tagParam_.makeTagFilename(path);
       const int flags = O_RDWR|O_CREAT|O_TRUNC;
       const int cropts = XRDOSS_mkpath;
 
@@ -331,26 +365,34 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
 
 int XrdOssCsi::Chmod(const char *path, mode_t mode, XrdOucEnv *envP)
 {
-   if (isTagFile(path)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
    return successor_->Chmod(path, mode, envP);
 }
 
 int XrdOssCsi::Remdir(const char *path, int Opts, XrdOucEnv *eP)
 {
-   if (isTagFile(path)) return -ENOENT;
-   return successor_->Remdir(path, Opts, eP);
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
+   const int ret = successor_->Remdir(path, Opts, eP);
+   if (ret != XrdOssOK || !config_.tagParam_.hasPrefix()) return ret;
+
+   // try to remove the corresponding directory under the tagfile directory.
+   // ignore errors
+
+   const std::string tpath = config_.tagParam_.makeBaseDir(path);
+   (void) successor_->Remdir(tpath.c_str(), Opts, eP);
+   return XrdOssOK;
 }
 
 int XrdOssCsi::Stat(const char *path, struct stat *buff, int opts,
                     XrdOucEnv  *EnvP)
 {
-   if (isTagFile(path)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
    return successor_->Stat(path, buff, opts, EnvP);
 }
 
 int XrdOssCsi::StatPF(const char *path, struct stat *buff, int opts)
 {
-   if (isTagFile(path)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
    if (!(opts & XrdOss::PF_dStat)) return successor_->StatPF(path, buff, opts);
 
    buff->st_rdev = 0;
@@ -380,7 +422,7 @@ int XrdOssCsi::StatPF(const char *path, struct stat *buff, int opts)
 int XrdOssCsi::StatXA(const char *path, char *buff, int &blen,
                          XrdOucEnv *envP)
 {
-   if (isTagFile(path)) return -ENOENT;
+   if (config_.tagParam_.isTagFile(path)) return -ENOENT;
    return successor_->StatXA(path, buff, blen, envP);
 }
 

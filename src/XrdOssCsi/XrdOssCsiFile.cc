@@ -124,7 +124,7 @@ int XrdOssCsiFile::pageAndFileOpen(const char *fn, const int dflags, const int O
    if (pmi_) return -EBADF;
 
    {
-      std::string tpath = std::string(fn) + ".xrdt";
+      std::string tpath = config_.tagParam_.makeTagFilename(fn);
       mapTake(tpath, pmi_);
    }
 
@@ -266,9 +266,9 @@ int XrdOssCsiFile::Open(const char *path, const int Oflag, const mode_t Mode, Xr
    {
       return -EINVAL;
    }
-   if (XrdOssCsi::isTagFile(path))
+   if (config_.tagParam_.isTagFile(path))
    {
-      if ((Oflag & O_CREAT)) return -EPERM;
+      if ((Oflag & O_CREAT)) return -EACCES;
       return -ENOENT;
    }
 

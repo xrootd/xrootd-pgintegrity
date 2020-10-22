@@ -60,10 +60,14 @@ public:
                 XrdOssCsiDir(XrdOss *parent, const char *tid, XrdOssCsiConfig &cf) : XrdOssDFHandler(parent->newDir(tid)), config_(cf) { }
 virtual        ~XrdOssCsiDir() { }
 
+virtual int     Opendir(const char *path, XrdOucEnv &env) /* override */;
 virtual int     Readdir(char *buff, int blen) /* override */;
 
 private:
    XrdOssCsiConfig &config_;
+   bool skipsuffix_;
+   bool skipprefix_;
+   std::string skipprefixname_;
 };
 
 class XrdOssCsiFile : public XrdOssDFHandler
@@ -197,12 +201,6 @@ virtual int       StatXA(const char *path, char *buff, int &blen,
 
                 XrdOssCsi(XrdOss *successor) : XrdOssHandler(successor) { }
 virtual        ~XrdOssCsi() { }
-
-   static bool isTagFile(const char *p)
-   {
-      if (p && strlen(p)>=5 && !strcmp(&p[strlen(p)-5],".xrdt")) return true;
-      return false;
-   }
 
    static std::unique_ptr<XrdOucEnv> tagOpenEnv(const XrdOssCsiConfig &, XrdOucEnv &);
 

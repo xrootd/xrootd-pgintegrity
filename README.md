@@ -42,4 +42,12 @@ they will be calculated from the data currently in the datafile.
 
 space=name
 The Oss space name to be used for the files containing the CRC32C values.
+
+prefix=/directory
+The files containing the CRC32C values will be stored under the give base
+directory as files ending in ".xrdt". The files are organised in
+directories to match the datafiles. By default the base directory is
+"/.xrdt". The syntax "prefix=" with no value has the special meaning that
+the .xrdt files will be stored inside the same directories as the datafiles.
+Accessing or listing the .xrdt files through xrootd is not supported.
 ```
