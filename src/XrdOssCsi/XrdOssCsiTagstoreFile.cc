@@ -42,7 +42,7 @@ int XrdOssCsiTagstoreFile::Open(const char *path, const off_t dsize, const int O
 {
    EPNAME("TagstoreFile::Open");
 
-   const int ret = fd_->Open(path, Oflag, 0600, Env);
+   const int ret = fd_->Open(path, Oflag, 0666, Env);
    if (ret<0)
    {
       return ret;

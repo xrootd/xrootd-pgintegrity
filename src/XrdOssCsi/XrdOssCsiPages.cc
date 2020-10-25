@@ -173,7 +173,7 @@ int XrdOssCsiPages::UpdateRange(XrdOssDF *const fd, const void *buff, const off_
       return 0;
    }
 
-   // update of file were checksums are based on the file data suppplied: as there's no seprate
+   // update of file were checksums are based on the file data suppplied: as there's no separate
    // source of checksum information mark this file as having unverified checksums
    LockMakeUnverified();
 

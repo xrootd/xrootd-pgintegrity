@@ -215,15 +215,24 @@ int XrdOssCsi::Rename(const char *oldname, const char *newname,
       return sret;
    }
 
-   const int opts = ((O_RDWR|O_CREAT|O_EXCL)<<8) | XRDOSS_mkpath | XRDOSS_new;
-   XrdOucEnv myEnv;
-   const int cret = successor_->Create("xrdt", inew.c_str(), 0600, new_env ? *new_env : myEnv, opts);
-   if (cret != XrdOssOK && cret != -EEXIST)
+   int mkdret = XrdOssOK;
+   {
+      std::string base = inew;
+      const size_t idx = base.rfind("/");
+      base = base.substr(0,idx);
+      if (!base.empty())
+      {
+         const int AMode = S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH; // 775
+         mkdret = successor_->Mkdir(base.c_str(), AMode, 1, new_env);
+      }
+   }
+
+   if (mkdret != XrdOssOK && mkdret != -EEXIST)
    {
       (void) successor_->Rename(newname, oldname, new_env, old_env);
       XrdOssCsiFile::mapRelease(pmi,&lck2);
       XrdOssCsiFile::mapRelease(newpmi,&lck);
-      return cret;
+      return mkdret;
    }
 
    const int iret = successor_->Rename(iold.c_str(), inew.c_str(), old_env, new_env);
@@ -231,7 +240,7 @@ int XrdOssCsi::Rename(const char *oldname, const char *newname,
    {
       if (iret == -ENOENT)
       {
-         // if there is no tag file for oldfile, delete new tag
+         // old tag did not exist, make sure there is no new tag
          (void) successor_->Unlink(inew.c_str(), 0, new_env);
       }
       else
@@ -274,7 +283,7 @@ int XrdOssCsi::Truncate(const char *path, unsigned long long size, XrdOucEnv *en
 
    std::unique_ptr<XrdOssDF> fp(newFile("xrdt"));
    XrdOucEnv   myEnv;
-   int ret = fp->Open(path, O_RDWR, 0600, envP ? *envP : myEnv);
+   int ret = fp->Open(path, O_RDWR, 0, envP ? *envP : myEnv);
    if (ret != XrdOssOK)
    {
       return ret;
@@ -305,13 +314,13 @@ int XrdOssCsi::Mkdir(const char *path, mode_t mode, int mkpath, XrdOucEnv *envP)
 int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
                       XrdOucEnv &env, int Opts)
 {
-   if (config_.tagParam_.isTagFile(path)) return -EACCES;
-
    // tident starting with '*' is a special case to bypass OssCsi
    if (tident && *tident == '*')
    {
       return successor_->Create(tident, path, access_mode, env, Opts);
    }
+
+   if (config_.tagParam_.isTagFile(path)) return -EACCES;
 
    // get mapinfo entries for file
    std::shared_ptr<XrdOssCsiFile::puMapItem_t> pmi;
@@ -354,7 +363,7 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
 
       std::unique_ptr<XrdOucEnv> tagEnv = tagOpenEnv(config_, env);
 
-      ret = successor_->Create(tident, tpath.c_str(), 0600, *tagEnv, (flags<<8)|cropts);
+      ret = successor_->Create(tident, tpath.c_str(), 0666, *tagEnv, (flags<<8)|cropts);
    }
 
    XrdOssCsiFile::mapRelease(pmi, &lck);
@@ -378,7 +387,7 @@ int XrdOssCsi::Remdir(const char *path, int Opts, XrdOucEnv *eP)
    // try to remove the corresponding directory under the tagfile directory.
    // ignore errors
 
-   const std::string tpath = config_.tagParam_.makeBaseDir(path);
+   const std::string tpath = config_.tagParam_.makeBaseDirname(path);
    (void) successor_->Remdir(tpath.c_str(), Opts, eP);
    return XrdOssOK;
 }
@@ -404,7 +413,7 @@ int XrdOssCsi::StatPF(const char *path, struct stat *buff, int opts)
 
    std::unique_ptr<XrdOssCsiFile> fp((XrdOssCsiFile*)newFile("xrdt"));
    XrdOucEnv   myEnv;
-   const int oret = fp->Open(path, O_RDONLY, 0600, myEnv);
+   const int oret = fp->Open(path, O_RDONLY, 0, myEnv);
    if (oret != XrdOssOK)
    {
       return oret;

@@ -94,7 +94,10 @@ void XrdOssCsiFile::mapTake(const std::string &key, std::shared_ptr<puMapItem_t>
       if (!create) return;
       pmi.reset(new puMapItem_t());
       pmi->tpath = key;
-      pumap_.insert(std::make_pair(key, pmi));
+      if (!key.empty())
+      {
+         pumap_.insert(std::make_pair(key, pmi));
+      }
    }
    else
    {
@@ -227,6 +230,26 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    if ((Oflag & O_CREAT) && ((Oflag & O_EXCL) || sb.st_size == 0))
    {
       tagFlags |= O_CREAT;
+   }
+
+   // be sure the leading directories exist for the tag file
+   if ((tagFlags & O_CREAT))
+   {
+      int mkdret = XrdOssOK;
+      {
+         std::string base = pmi_->tpath;
+         const size_t idx = base.rfind("/");
+         base = base.substr(0,idx);
+         if (!base.empty())
+         {
+            const int AMode = S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH; // 775
+            mkdret = parentOss_->Mkdir(base.c_str(), AMode, 1, tagEnv.get());
+         }
+      }
+      if (mkdret != XrdOssOK && mkdret != -EEXIST && mkdret != -EROFS)
+      {
+         return mkdret;
+      }
    }
 
    std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident));
