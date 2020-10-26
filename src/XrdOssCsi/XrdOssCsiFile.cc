@@ -246,7 +246,7 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
             mkdret = parentOss_->Mkdir(base.c_str(), AMode, 1, tagEnv.get());
          }
       }
-      if (mkdret != XrdOssOK && mkdret != -EEXIST && mkdret != -EROFS)
+      if (mkdret != XrdOssOK && mkdret != -EEXIST)
       {
          return mkdret;
       }
@@ -259,7 +259,7 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    int puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, tagFlags, *tagEnv);
    if (puret<0)
    {
-      if (puret == -EROFS && rdonly_)
+      if ((puret == -EROFS || puret == -EACCES) && rdonly_)
       {
          // try to open tag file readonly
          puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, O_RDONLY, *tagEnv);
@@ -324,7 +324,7 @@ int XrdOssCsiFile::Open(const char *path, const int Oflag, const mode_t Mode, Xr
    if (Pages()->IsReadOnly() && !rdonly_)
    {
       (void)Close();
-      return -EROFS;
+      return -EACCES;
    }
    return XrdOssOK;
 }
