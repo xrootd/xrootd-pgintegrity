@@ -62,7 +62,11 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
       }
       uint8_t b[XrdSys::PageSize];
       ssize_t rret = XrdOssCsiPages::maxread(fd, b, tracked_page*XrdSys::PageSize, XrdSys::PageSize);
-      if (rret < 0) return rret;
+      if (rret < 0)
+      {
+         TRACE(Warn, "Error reading data from " << fn_ << " offset " << (tracked_page*XrdSys::PageSize) << " error=" << rret);
+         return rret;
+      }
       if (static_cast<size_t>(rret) < tracked_off)
       {
          TRACE(Warn, "Read to end of file " << fn_ << " read only " << rret << " instead of " << tracked_off << " bytes");
@@ -76,7 +80,11 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
       }
       uint32_t prevtag;
       rret = ts_->ReadTags(&prevtag, tracked_page, 1);
-      if (rret < 0) return rret;
+      if (rret < 0)
+      {
+         TRACE(Warn, "Error reading tag for " << fn_ << " page " << tracked_page << " error=" << rret);
+         return rret;
+      }
       uint32_t crc32c = XrdOucCRC::Calc32C(b, tracked_off, 0U);
       if (crc32c != prevtag)
       {
@@ -85,7 +93,11 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
       }
       crc32c = XrdOucCRC::Calc32C(bz, XrdSys::PageSize - tracked_off, prevtag);
       const ssize_t wret = ts_->WriteTags(&crc32c, tracked_page, 1);
-      if (wret < 0) return wret;
+      if (wret < 0)
+      {
+         TRACE(Warn, "Error writing tag for " << fn_ << " page " << tracked_page << " error=" << wret);
+         return wret;
+      }
    }
 
    if (!writeHoles_) return 0;
@@ -99,7 +111,11 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
    {
       const size_t nw = std::min(towrite, (off_t)crc32Vec.size());
       const ssize_t wret = ts_->WriteTags(&crc32Vec[0], firstEmpty+nwritten, nw);
-      if (wret<0) return wret;
+      if (wret<0)
+      {
+         TRACE(Warn, "Error writing tag for " << fn_ << " (empty page) pages " << (firstEmpty+nwritten) << " to " << (firstEmpty+nwritten+nw-1) << " error=" << wret);
+         return wret;
+      }
       towrite -= wret;
       nwritten += wret;
    }
@@ -116,7 +132,11 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
    if (offset > trackinglen)
    {
       const int ret = UpdateRangeHoleUntilPage(fd, p1, sizes);
-      if (ret<0) return ret;
+      if (ret<0)
+      {
+         TRACE(Warn, "Error updating tags for holes, error=" << ret);
+         return ret;
+      }
    }
 
    const size_t p1_off = offset % XrdSys::PageSize;
@@ -169,13 +189,17 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
             ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
             if (rret<0)
             {
-               TRACE(Warn, "Read error from " << fn_ << " result " << rret);
+               TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
                return -EIO;
             }
             const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
             uint32_t crc32v;
             rret = ts_->ReadTags(&crc32v, p1, 1);
-            if (rret<0) return rret;
+            if (rret<0)
+            {
+               TRACE(Warn, "Error reading tag for " << fn_ << " page " << p1 << " error=" << rret);
+               return rret;
+            }
             if (crc32v != crc32c)
             {
                TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p1);
@@ -205,7 +229,11 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
       if (hasprepage)
       {
          const ssize_t wret = ts_->WriteTags(&prepageval, p1, 1);
-         if (wret<0) return wret;
+         if (wret<0)
+         {
+            TRACE(Warn, "Error writing tag for " << fn_ << " page " << p1 << " error=" << wret);
+            return wret;
+         }
       }
       return 0;
    }
@@ -217,7 +245,11 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
    {
       // write prepage, calc and write full pages and last partial page
       const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, NULL, hasprepage, false, prepageval, 0U);
-      if (aret<0) return aret;
+      if (aret<0)
+      {
+         TRACE(Warn, "Error updating tags, error=" << aret);
+         return aret;
+      }
       return 0;
    }
 
@@ -229,13 +261,17 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
       ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p2, toread);
       if (rret<0)
       {
-         TRACE(Warn, "Read error from " << fn_ << " result " << rret);
+         TRACE(Warn, "Error reading data (2) from " << fn_ << " result " << rret);
          return -EIO;
       }
       const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
       uint32_t crc32v;
       rret = ts_->ReadTags(&crc32v, p2, 1);
-      if (rret<0) return rret;
+      if (rret<0)
+      {
+         TRACE(Warn, "Error reading tag (2) for " << fn_ << " page " << p2 << " error=" << rret);
+         return rret;
+      }
       if (crc32v != crc32c)
       {
          TRACE(Warn, "CRC error " << fn_ << " in page (2) starting at offset " << XrdSys::PageSize*p2);
@@ -247,7 +283,11 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
 
    // write prepage, calculate and write full pages, and write precomputed last page
    const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, NULL, hasprepage, true, prepageval, lastpageval);
-   if (aret<0) return aret;
+   if (aret<0)
+   {
+      TRACE(Warn, "Error updating tags, error=" << aret);
+      return aret;
+   }
 
    return 0;
 }
@@ -270,7 +310,11 @@ ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *con
 
    size_t tcnt = std::min(ntagstoread, tbufsz);
    ssize_t rret = ts_->ReadTags(tbuf, ntagsbase, tcnt);
-   if (rret<0) return rret;
+   if (rret<0)
+   {
+      TRACE(Warn, "Error reading tags for " << fn_ << " pages " << ntagsbase << " to " << (ntagsbase+tcnt-1) << " error=" << rret);
+      return rret;
+   }
    ntagstoread -= tcnt;
 
    // deal with partial first page
@@ -279,7 +323,11 @@ ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *con
       const size_t bavail = std::min(trackinglen - (XrdSys::PageSize*p1), (off_t)XrdSys::PageSize);
       uint8_t b[XrdSys::PageSize];
       rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p1, bavail);
-      if (rret<0) return rret;
+      if (rret<0)
+      {
+         TRACE(Warn, "Error reading data from " << fn_ << " offset " << (p1*XrdSys::PageSize) << " length " << bavail << " error=" << rret);
+         return rret;
+      }
       const size_t bcommon = std::min(bavail - p1_off, blen);
       if (memcmp(buff, &b[p1_off], bcommon))
       {
@@ -321,7 +369,11 @@ ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *con
                ntagsbase += tbufsz;
                tcnt = std::min(ntagstoread, tbufsz);
                rret = ts_->ReadTags(tbuf, ntagsbase, tcnt);
-               if (rret<0) return rret;
+               if (rret<0)
+               {
+                  TRACE(Warn, "Error reading tags (2) for " << fn_ << " pages " << ntagsbase << " to " << (ntagsbase+tcnt-1) << " error=" << rret);
+                  return rret;
+               }
                ntagstoread -= tcnt;
                continue;
             }
@@ -346,7 +398,11 @@ ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *con
       const size_t bavail = std::min(trackinglen - (XrdSys::PageSize*p2), (off_t)XrdSys::PageSize);
       uint8_t b[XrdSys::PageSize];
       rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p2, bavail);
-      if (rret<0) return rret;
+      if (rret<0)
+      {
+         TRACE(Warn, "Error reading data (2) from " << fn_ << " offset " << (p2*XrdSys::PageSize) << " length " << bavail << " error=" << rret);
+         return rret;
+      }
       const uint8_t *const p = (uint8_t*)buff;
       if (memcmp(&p[blen-p2_off], b, p2_off))
       {
@@ -362,7 +418,11 @@ ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *con
          tidx = 0;
          ntagsbase = p2;
          rret = ts_->ReadTags(tbuf, ntagsbase, 1);
-         if (rret<0) return rret;
+         if (rret<0)
+         {
+            TRACE(Warn, "Error reading tag (3) for " << fn_ << " page " << ntagsbase << " error=" << rret);
+            return rret;
+         }
          ntagstoread--;
       }
       if (tbuf[tidx] != crc32calc)

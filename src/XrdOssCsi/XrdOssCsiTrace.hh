@@ -37,6 +37,7 @@
 //
 #define TRACE_ALL       0x0fff
 #define TRACE_Warn      0x0001
+#define TRACE_Info      0x0002
 #define TRACE_Debug     0x0800
 
 #ifndef NODEBUG

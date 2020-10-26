@@ -68,6 +68,7 @@ int XrdOssCsiPages::Open(const char *path, off_t dsize, int flags, XrdOucEnv &en
       // no existing tag
       if (allowMissingTags_)
       {
+         TRACE(Info, "Opening with missing tagfile: " << fn_);
          hasMissingTags_ = true;
          return 0;
       }
@@ -256,6 +257,8 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
    const void *const buff, const off_t startp, const size_t nbytes, uint32_t *csvec,
    const bool preblockset, const bool lastblockset, const uint32_t cspre, const uint32_t cslast)
 {
+   EPNAME("apply_sequential_aligned_modify");
+
    if (csvec && (preblockset || lastblockset))
    {
       return -EINVAL;
@@ -310,7 +313,11 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
          calcbytot += calcbycnt;
       }
       const ssize_t wret = ts_->WriteTags(csvec ? &csvec[nblkwritten] : calcbuf, sp+nblkwritten, blkwcnt);
-      if (wret<0) return wret;
+      if (wret<0)
+      {
+         TRACE(Warn, "Error writing tags for " << fn_ << " pages " << (sp+nblkwritten) << " to " << (sp+nblkwritten+blkwcnt-1) << " error=" << wret);
+         return wret;
+      }
       blktowrite -= blkwcnt;
       nblkwritten += blkwcnt;
    }
@@ -397,6 +404,8 @@ ssize_t XrdOssCsiPages::VerifyRangeAligned(const void *const buff, const off_t o
 
 int XrdOssCsiPages::StoreRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *csvec)
 {
+   EPNAME("StoreRangeAligned");
+
    // if csvec given store those values
    // if no csvec then calculate against data and store
 
@@ -406,11 +415,19 @@ int XrdOssCsiPages::StoreRangeAligned(const void *const buff, const off_t offset
    if (offset > trackinglen)
    {
       const int ret = UpdateRangeHoleUntilPage(NULL, p1, sizes);
-      if (ret<0) return ret;
+      if (ret<0)
+      {
+         TRACE(Warn, "Error updating tags for holes, error=" << ret);
+         return ret;
+      }
    }
 
    const ssize_t aret = apply_sequential_aligned_modify(buff, p1, blen, csvec, false, false, 0U, 0U);
-   if (aret<0) return aret;
+   if (aret<0)
+   {
+      TRACE(Warn, "Error updating tags, error=" << aret);
+      return aret;
+   }
 
    return 0;
 }
@@ -489,7 +506,11 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
    if (len>trackinglen)
    {
       int ret = UpdateRangeHoleUntilPage(fd,p_until,sizes);
-      if (ret<0) return ret;
+      if (ret<0)
+      {
+         TRACE(Warn, "Error updating tags for holes, error=" << ret);
+         return ret;
+      }
    }
 
    if (len != trackinglen && p_off != 0)
@@ -509,11 +530,19 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
       if (toread>0)
       {
          ssize_t rret = XrdOssCsiPages::fullread(fd, b, p_until*XrdSys::PageSize, toread);
-         if (rret<0) return rret;
+         if (rret<0)
+         {
+            TRACE(Warn, "Error reading data from " << fn_ << " offset " << (p_until*XrdSys::PageSize) << " length " << toread << " error=" << rret);
+            return rret;
+         }
          const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
          uint32_t crc32v;
          rret = ts_->ReadTags(&crc32v, p_until, 1);
-         if (rret<0) return rret;
+         if (rret<0)
+         {
+            TRACE(Warn, "Error reading tag for " << fn_ << " page " << p_until << " error=" << rret);
+            return rret;
+         }
          if (crc32v != crc32c)
          {
             TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p_until);
@@ -526,7 +555,11 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
       }
       const uint32_t crc32c = XrdOucCRC::Calc32C(b, p_off, 0U);
       const ssize_t wret = ts_->WriteTags(&crc32c, p_until, 1);
-      if (wret < 0) return wret;
+      if (wret < 0)
+      {
+         TRACE(Warn, "Error writing tag for " << fn_ << " page " << p_until << " error=" << wret);
+         return wret;
+      }
    }
 
    LockTruncateSize(len,true);

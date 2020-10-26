@@ -132,6 +132,7 @@ int XrdOssCsiTagstoreFile::Open(const char *path, const off_t dsize, const int O
 
 int XrdOssCsiTagstoreFile::ResetSizes(const off_t size)
 {
+   EPNAME("ResetSizes");
    if (!isOpen) return -EBADF;
    actualsize_ = size;
    struct stat sb;
@@ -141,6 +142,8 @@ int XrdOssCsiTagstoreFile::ResetSizes(const off_t size)
    // truncate can be relatively slow
    if (expected_tagfile_size < sb.st_size)
    {
+      TRACE(Warn, "Truncating tagfile to " << expected_tagfile_size <<
+         ", from current size " << sb.st_size << " for " << fn_);
       const int tret = fd_->Ftruncate(expected_tagfile_size);
       if (tret<0) return tret;
    }
@@ -148,6 +151,8 @@ int XrdOssCsiTagstoreFile::ResetSizes(const off_t size)
    {
       off_t nb = 0;
       if (sb.st_size>20) nb = (sb.st_size - 20)/4;
+      TRACE(Warn, "Reducing tracked size to " << (nb*XrdSys::PageSize) <<
+         " instead of " << trackinglen_ << ", because of short tagfile for " << fn_);
       const int stret = WriteTrackedTagSize(nb*XrdSys::PageSize);
       if (stret<0) return stret;
       const int tret = fd_->Ftruncate(20LL + 4*nb);

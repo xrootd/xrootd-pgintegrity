@@ -153,7 +153,8 @@ int XrdOssCsiConfig::xtrace(XrdOucStream &Config, XrdSysError &Eroute)
        {
         {"all",      TRACE_ALL},
         {"debug",    TRACE_Debug},
-        {"warn",     TRACE_Warn}
+        {"warn",     TRACE_Warn},
+        {"info",     TRACE_Info}
        };
     int i, neg, trval = 0, numopts = sizeof(tropts)/sizeof(struct traceopts);
 
