@@ -206,8 +206,13 @@ int XrdOssCsiTagstoreFile::Truncate(const off_t size, bool datatoo)
    {
       return -EBADF;
    }
+
+   // truncating down to zero, so reset to content verified
+   if (datatoo && size==0) hflags_ |= XrdOssCsiTagstore::csVer;
+
    int wtt = WriteTrackedTagSize(size);
    if (wtt<0) return wtt;
+
    if (datatoo) actualsize_ = size;
    const off_t expected_tagfile_size = 20LL + 4*((size+XrdSys::PageSize-1)/XrdSys::PageSize);
    return fd_->Ftruncate(expected_tagfile_size);
