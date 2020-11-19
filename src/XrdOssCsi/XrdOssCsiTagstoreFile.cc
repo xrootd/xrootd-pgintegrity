@@ -207,6 +207,13 @@ int XrdOssCsiTagstoreFile::Truncate(const off_t size, bool datatoo)
       return -EBADF;
    }
 
+   // set tag file to correct length for value of size
+   const off_t expected_tagfile_size = 20LL + 4*((size+XrdSys::PageSize-1)/XrdSys::PageSize);
+   const int tret = fd_->Ftruncate(expected_tagfile_size);
+
+   // if failed to set the tagfile length return error before updating header
+   if (tret != XrdOssOK) return tret;
+
    // truncating down to zero, so reset to content verified
    if (datatoo && size==0) hflags_ |= XrdOssCsiTagstore::csVer;
 
@@ -214,8 +221,7 @@ int XrdOssCsiTagstoreFile::Truncate(const off_t size, bool datatoo)
    if (wtt<0) return wtt;
 
    if (datatoo) actualsize_ = size;
-   const off_t expected_tagfile_size = 20LL + 4*((size+XrdSys::PageSize-1)/XrdSys::PageSize);
-   return fd_->Ftruncate(expected_tagfile_size);
+   return 0;
 }
 
 ssize_t XrdOssCsiTagstoreFile::WriteTags_swap(const uint32_t *const buf, const off_t off, const size_t n)
