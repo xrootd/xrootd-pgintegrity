@@ -35,15 +35,16 @@
 #include "XrdSys/XrdSysPageSize.hh"
 
 #include <vector>
+#include <assert.h>
 
 extern XrdOucTrace  OssCsiTrace;
+static const uint8_t g_bz[XrdSys::PageSize] = {0};
 
 int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, const Sizes_t &sizes)
 {
    EPNAME("UpdateRangeHoleUntilPage");
 
-   static const uint8_t bz[XrdSys::PageSize] = {0};
-   static const uint32_t crczero = XrdOucCRC::Calc32C(bz, XrdSys::PageSize, 0U);
+   static const uint32_t crczero = XrdOucCRC::Calc32C(g_bz, XrdSys::PageSize, 0U);
    static const std::vector<uint32_t> crc32Vec(stsize_, crczero);
 
    const off_t trackinglen = sizes.first;
@@ -60,38 +61,15 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
          TRACE(Warn, "Unexpected partially filled last page " << fn_);
          return -EIO;
       }
-      uint8_t b[XrdSys::PageSize];
-      ssize_t rret = XrdOssCsiPages::maxread(fd, b, tracked_page*XrdSys::PageSize, XrdSys::PageSize);
-      if (rret < 0)
-      {
-         TRACE(Warn, "Error reading data from " << fn_ << " offset " << (tracked_page*XrdSys::PageSize) << " error=" << rret);
-         return rret;
-      }
-      if (static_cast<size_t>(rret) < tracked_off)
-      {
-         TRACE(Warn, "Read to end of file " << fn_ << " read only " << rret << " instead of " << tracked_off << " bytes");
-         return -EIO;
-      }
-      const ssize_t extra = rret - tracked_off;
-      if (memcmp(bz, &b[tracked_off], extra))
-      {
-         TRACE(Warn, "Read non-zero data past tracked EOF " << fn_);
-         return -EIO;
-      }
+      // assume tag for last page is correct; if not it can be discovered during a later read
       uint32_t prevtag;
-      rret = ts_->ReadTags(&prevtag, tracked_page, 1);
+      const ssize_t rret = ts_->ReadTags(&prevtag, tracked_page, 1);
       if (rret < 0)
       {
          TRACE(Warn, "Error reading tag for " << fn_ << " page " << tracked_page << " error=" << rret);
          return rret;
       }
-      uint32_t crc32c = XrdOucCRC::Calc32C(b, tracked_off, 0U);
-      if (crc32c != prevtag)
-      {
-         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*tracked_page);
-         return -EDOM;
-      }
-      crc32c = XrdOucCRC::Calc32C(bz, XrdSys::PageSize - tracked_off, prevtag);
+      const uint32_t crc32c = XrdOucCRC::Calc32C(g_bz, XrdSys::PageSize - tracked_off, prevtag);
       const ssize_t wret = ts_->WriteTags(&crc32c, tracked_page, 1);
       if (wret < 0)
       {
@@ -153,7 +131,6 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
    if ( p1_off>0 || blen < static_cast<size_t>(XrdSys::PageSize) )
    {
       const size_t bavail = (XrdSys::PageSize-p1_off > blen) ? blen : (XrdSys::PageSize-p1_off);
-      uint8_t b[XrdSys::PageSize];
       if (p1 > tracked_page)
       {
          // the start of will have a number of implied zero bytes
@@ -164,9 +141,8 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
          }
          else
          {
-            memset(b, 0, p1_off);
-            memcpy(&b[p1_off], buff, bavail);
-            crc32c = XrdOucCRC::Calc32C(b, p1_off+bavail, 0U);
+            crc32c = XrdOucCRC::Calc32C(g_bz, p1_off, 0U);
+            crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
          }
          hasprepage = true;
          prepageval = crc32c;
@@ -177,44 +153,67 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
          // the read-modify-write cycle. However this case is sent to the aligned version of update.
          // Therefore it is not tested and optimised for here.
 
-         // the case (p1 == tracked_page && tracked_off == p1_off) could also be done without the
-         // read-modify-write cycle, as the previous tag cal be recalculated with extra data added. However
-         // we prefer to fail during the write, if the page content is in error, since a subsequent read
-         // will show this failure.
+         uint8_t b[XrdSys::PageSize];
+         if (p1 == tracked_page && p1_off >= tracked_off)
+         {
+            // appending: with or without some implied zeros.
+            // can recalc crc with new data without re-reading existing partial block's data
+            uint32_t crc32v = 0;
+            if (tracked_off > 0)
+            {
+               const ssize_t rret = ts_->ReadTags(&crc32v, p1, 1);
+               if (rret<0)
+               {
+                  TRACE(Warn, "Error reading tag (append) for " << fn_ << " page " << p1 << " error=" << rret);
+                  return rret;
+               }
+            }
+            const size_t nz = p1_off - tracked_off;
+            uint32_t crc32c = crc32v;
+            if (nz>0) crc32c = XrdOucCRC::Calc32C(g_bz, nz, crc32c);
+            crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
+            hasprepage = true;
+            prepageval = crc32c;
+         }
+         else
+         {
+           // read some preexisting data and/or implied zero bytes
+           const size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
 
-         // read some preexisting data and/or implied zero bytes
-         const size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
-         if (toread>0)
-         {
-            ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
-            if (rret<0)
-            {
-               TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
-               return -EIO;
-            }
-            const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
-            uint32_t crc32v;
-            rret = ts_->ReadTags(&crc32v, p1, 1);
-            if (rret<0)
-            {
-               TRACE(Warn, "Error reading tag for " << fn_ << " page " << p1 << " error=" << rret);
-               return rret;
-            }
-            if (crc32v != crc32c)
-            {
-               TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p1);
-               return -EDOM;
-            }
+           // assert we're overwriting some (or all) of the previous data.
+           // append or write after data case was covered above, total overwrite would be sent to aligned case
+           assert(p1_off < toread);
+           if (toread>0)
+           {
+              ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
+              if (rret<0)
+              {
+                 TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
+                 return -EIO;
+              }
+              const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
+              uint32_t crc32v;
+              rret = ts_->ReadTags(&crc32v, p1, 1);
+              if (rret<0)
+              {
+                 TRACE(Warn, "Error reading tag for " << fn_ << " page " << p1 << " error=" << rret);
+                 return rret;
+              }
+              if (crc32v != crc32c)
+              {
+                 TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p1);
+                 return -EDOM;
+              }
+           }
+           memcpy(&b[p1_off], buff, bavail);
+           const uint32_t crc32c = XrdOucCRC::Calc32C(b, std::max(p1_off+bavail, toread), 0U);
+           hasprepage = true;
+           prepageval = crc32c;
          }
-         if (p1_off > toread)
-         {
-            memset(&b[toread], 0, p1_off-toread);
-         }
-         memcpy(&b[p1_off], buff, bavail);
-         const uint32_t crc32c = XrdOucCRC::Calc32C(b, std::max(p1_off+bavail, toread), 0U);
-         hasprepage = true;
-         prepageval = crc32c;
       }
+      // this was a partial first page: we must have calculated
+      // a pre-page value
+      assert(hasprepage == true);
    }
 
    // next page (if any)
