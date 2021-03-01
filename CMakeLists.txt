@@ -8,6 +8,17 @@ macro( define_default variable value )
   endif()
 endmacro()
 
+#-------------------------------------------------------------------------------
+# Define the default build parameters
+#-------------------------------------------------------------------------------
+if( "${CMAKE_BUILD_TYPE}" STREQUAL "" )
+  if(BUILD_TEST)
+    set( CMAKE_BUILD_TYPE Debug )
+  else()
+    set( CMAKE_BUILD_TYPE RelWithDebInfo )
+  endif()
+endif()
+
 define_default( PLUGIN_VERSION    5 )
 add_definitions( -DXRDPLUGIN_SOVERSION="${PLUGIN_VERSION}" )
 
@@ -16,6 +27,7 @@ include(GNUInstallDirs)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake ${PROJECT_SOURCE_DIR}/src)
 
 if(BUILD_TEST)
+  ENABLE_TESTING()
   set(GCC_COVERAGE_COMPILE_FLAGS "-g -O0 --coverage -fprofile-arcs -ftest-coverage -std=c++0x")
   set(GCC_COVERAGE_LINK_FLAGS    "--coverage -lgcov")
   set( CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${GCC_COVERAGE_COMPILE_FLAGS}" )
