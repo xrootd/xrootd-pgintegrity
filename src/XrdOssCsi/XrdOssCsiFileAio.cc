@@ -116,6 +116,7 @@ int XrdOssCsiFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
 
 int XrdOssCsiFile::Fsync(XrdSfsAio *aiop)
 {
+   aioWait();
    aiop->Result = this->Fsync();
    aiop->doneWrite();
    return 0;

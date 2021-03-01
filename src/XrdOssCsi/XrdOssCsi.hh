@@ -108,7 +108,15 @@ virtual int     pgWrite(XrdSfsAio*, uint64_t) /* override */;
                     rdonly_(false), aioCntCond_(0), aioCnt_(0), aioCntWaiters_(0) { }
 virtual        ~XrdOssCsiFile();
 
-        void    aioInc() { XrdSysCondVarHelper lck(&aioCntCond_); ++aioCnt_; }
+        void    aioInc()
+        {
+           XrdSysCondVarHelper lck(&aioCntCond_);
+           while(aioCntWaiters_>0)
+           {
+              aioCntCond_.Wait();
+           }
+           ++aioCnt_;
+        }
         void    aioDec()
         {
            XrdSysCondVarHelper lck(&aioCntCond_);
@@ -124,6 +132,7 @@ virtual        ~XrdOssCsiFile();
               aioCntCond_.Wait();
            }
            --aioCntWaiters_;
+           aioCntCond_.Broadcast();
         }
 
         int VerificationStatus();
