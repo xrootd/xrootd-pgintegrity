@@ -204,12 +204,17 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
 {
    std::unique_ptr<XrdOucEnv> tagEnv = XrdOssCsi::tagOpenEnv(config_, Env);
 
-   // get information about data file
-   struct stat sb;
-   const int sstat = successor_->Fstat(&sb);
-   if (sstat<0)
+   // get information about data file size
+   off_t dsize = 0;
+   if (!(Oflag & O_EXCL) && !(Oflag & O_TRUNC))
    {
-      return sstat;
+      struct stat sb;
+      const int sstat = successor_->Fstat(&sb);
+      if (sstat<0)
+      {
+         return sstat;
+      }
+      dsize = sb.st_size;
    }
 
    // tag file always opened O_RDWR as the Tagstore/Pages object associated will be shared
@@ -220,14 +225,13 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    // data file was truncated, do same to tag file and let it be reset
    if ((Oflag & O_TRUNC)) tagFlags |= O_TRUNC;
 
-   // The concern with creating a new tag file is that the data file may already exist
-   // without a tag file.
-   // Creating a new empty tag file in this situation will make errors, whereas with it
-   // missing it may be acceptable, depending on the configuration.
-   // Therefore:
-   // If O_CREAT is given along with O_EXCL the datafile must be new so it is ok to make a tag.
-   // If O_CREAT is given and the data file length is zero also try to create the tag.
-   if ((Oflag & O_CREAT) && ((Oflag & O_EXCL) || sb.st_size == 0))
+   // The concern with allowing creation of a new tag file is that the data file may
+   // already exist. Creating a new empty tag file would usually cause subsequent access
+   // errors, but not if the data file starts empty. In addition we may have been
+   // configured to ignore missing tag files. Approach taken is that:
+   //   If the data file creation was wanted and it is currently zero length then
+   //   allow creation of tag file.
+   if ((Oflag & O_CREAT) && dsize == 0)
    {
       tagFlags |= O_CREAT;
    }
@@ -256,13 +260,13 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    std::unique_ptr<XrdOssCsiTagstore> ts(new XrdOssCsiTagstoreFile(pmi_->dpath, std::move(integFile), tident));
    std::unique_ptr<XrdOssCsiPages> pages(new XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), tident));
 
-   int puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, tagFlags, *tagEnv);
+   int puret = pages->Open(pmi_->tpath.c_str(), dsize, tagFlags, *tagEnv);
    if (puret<0)
    {
       if ((puret == -EROFS || puret == -EACCES) && rdonly_)
       {
          // try to open tag file readonly
-         puret = pages->Open(pmi_->tpath.c_str(), sb.st_size, O_RDONLY, *tagEnv);
+         puret = pages->Open(pmi_->tpath.c_str(), dsize, O_RDONLY, *tagEnv);
       }
    }
 

@@ -1,9 +1,10 @@
 XrdOssCsi
 =========
 
-XrdOssCsi is a stackable Oss plugin that adds the filesystem checksum (XRDOSS_HASFSCS)
+XrdOssCsi is a stacked Oss plugin that adds the filesystem checksum (XRDOSS_HASFSCS)
 feature to an Oss by storing per-page CRC32C values as a separate file.
-Write() and Read() calls update or check against the stored CRC32C values.
+Write() and Read() calls update or check against the stored CRC32C values. pgWrite()
+and pgRead() can be used to directly write or read the values.
 
 Usage:
 ------
@@ -34,11 +35,13 @@ should not be read. Partial write of pages implies a read-modify-write, which
 would also fail.
 
 nomissing
-This option requires the files containing the CRC32C values to exist for previously
-existing datafiles. If they do not an error will be returned when tyring to open the datafile.
-Conversely, the default behaviour if a CRC file does not exist is that CRC values
-will not be written or verfieid as the datafile is accessed. If CRC values are requested
-they will be calculated from the data currently in the datafile.
+This option requires the files containing the CRC32C values to exist for
+previously existing datafiles with non-zero length. If the tag file does not exist an
+error will be returned. The default behaviour if a CRC file does not exist
+for an existing datafile is that CRC values will not be written or verfieid as
+the datafile is accessed. If CRC values are requested they will be calculated
+from the data currently in the datafile. In either case, empty datafiles which
+are opened with create or truncation will have their tag files created if needed.
 
 space=name
 The Oss space name to be used for the files containing the CRC32C values.

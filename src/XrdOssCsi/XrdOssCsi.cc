@@ -346,24 +346,37 @@ int XrdOssCsi::Create(const char *tident, const char *path, mode_t access_mode,
       return -EDEADLK;
    }
 
-   // create file: require it not to exist (unless we're truncating)
-   // so that we don't create a new tagfile for an existing file
+   // create file: require it not to exist (unless we're truncating) so that
+   // we can tell if we have a zero length file without stat in more cases
 
    const int exflags = isTrunc ? 0 : ((O_EXCL<<8)|XRDOSS_new);
 
    int ret = successor_->Create(tident, path, access_mode, env, Opts | exflags);
-   if (ret == XrdOssOK)
+   if (ret == XrdOssOK || ret == -EEXIST)
    {
-      // Try to create and truncate the tag file now, since the datafile
-      // must either be newly created or has been truncated.
+      // success from trunc/exclusive create means the file must now be zero length
+      bool zlen = (ret == XrdOssOK) ? true : false;
+      struct stat sbuf;
+      if (!zlen && successor_->Stat(path, &sbuf, 0, &env) == XrdOssOK)
+      {
+         // had to check file size
+         if (sbuf.st_size == 0)
+         {
+            zlen = true;
+         }
+      }
+      
+      // If datafile is zero length try to make empty tag file
+      if (zlen)
+      {
+         const std::string tpath = config_.tagParam_.makeTagFilename(path);
+         const int flags = O_RDWR|O_CREAT|O_TRUNC;
+         const int cropts = XRDOSS_mkpath;
 
-      const std::string tpath = config_.tagParam_.makeTagFilename(path);
-      const int flags = O_RDWR|O_CREAT|O_TRUNC;
-      const int cropts = XRDOSS_mkpath;
+         std::unique_ptr<XrdOucEnv> tagEnv = tagOpenEnv(config_, env);
 
-      std::unique_ptr<XrdOucEnv> tagEnv = tagOpenEnv(config_, env);
-
-      ret = successor_->Create(tident, tpath.c_str(), 0666, *tagEnv, (flags<<8)|cropts);
+         ret = successor_->Create(tident, tpath.c_str(), 0666, *tagEnv, (flags<<8)|cropts);
+      }
    }
 
    XrdOssCsiFile::mapRelease(pmi, &lck);
