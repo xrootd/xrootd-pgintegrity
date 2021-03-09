@@ -78,6 +78,10 @@ int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char
       {
          if (tagParam_.SetPrefix(Eroute, value)) NoGo = 1;
       }
+      else if (item == "nopgextend")
+      {
+         disablePgExtend_ = true;
+      }
    }
 
    if (NoGo) return NoGo;
@@ -89,6 +93,7 @@ int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char
    Eroute.Say("       compute file holes: ", fillFileHole_ ? "yes" : "no");
    Eroute.Say("       space name: ", xrdtSpaceName_.c_str());
    Eroute.Say("       allow files without CRCs: ", allowMissingTags_ ? "yes" : "no");
+   Eroute.Say("       stop pgWrite from extending partial page: ", disablePgExtend_ ? "yes" : "no");
    Eroute.Say("       trace level: ", std::to_string((long long int)OssCsiTrace.What).c_str());
    Eroute.Say("       prefix: ", tagParam_.prefix_.empty() ? "[empty]" : tagParam_.prefix_.c_str());
 

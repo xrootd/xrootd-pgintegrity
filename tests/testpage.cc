@@ -446,6 +446,27 @@ TEST_F(osscsi_pageTest,writeoverlap) {
   ASSERT_TRUE(memcmp(csvec, csvec2, 4*4)==0);
 }
 
+TEST_F(osscsi_pageTest,pgwritenonaligned) {
+  uint32_t csvec[3]={0},csvec2[3];
+  ssize_t ret = m_file->pgWrite(m_b, 2100, 8100, csvec, XrdOssDF::doCalc);
+  ASSERT_TRUE(ret == 8100);
+  uint8_t rbuf[16384];
+  ret = m_file->pgRead(rbuf, 0, 16384, csvec2, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 10200);
+  ASSERT_TRUE(memcmp(&rbuf[2100], m_b, 8100)==0);
+  ASSERT_TRUE(memcmp(&csvec[1], &csvec2[1], 2*4)==0);
+}
+
+TEST_F(osscsi_pageTest,pgwritenonaligned2) {
+  uint32_t csvec[3]={0};
+  ssize_t ret = m_file->pgWrite(m_b, 2100, 8100, NULL, 0);
+  ASSERT_TRUE(ret == 8100);
+  uint8_t rbuf[16384];
+  ret = m_file->pgRead(rbuf, 0, 16384, csvec, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 10200);
+  ASSERT_TRUE(memcmp(&rbuf[2100], m_b, 8100)==0);
+}
+
 } // namespace integrationTests
 
 int main(int argc, char** argv) {

@@ -42,10 +42,11 @@
 
 extern XrdOucTrace  OssCsiTrace;
 
-XrdOssCsiPages::XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, const char *tid) :
+XrdOssCsiPages::XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, bool dpe, const char *tid) :
         ts_(std::move(ts)),
         writeHoles_(wh),
         allowMissingTags_(am),
+        disablePgExtend_(dpe),
         hasMissingTags_(false),
         rdonly_(false),
         tscond_(0),
@@ -156,6 +157,8 @@ void XrdOssCsiPages::TrackedSizeRelease()
    tscond_.Broadcast();
 }
 
+// Used by Write
+//
 int XrdOssCsiPages::UpdateRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssCsiRangeGuard &rg)
 {
    if (offset<0)
@@ -202,6 +205,8 @@ int XrdOssCsiPages::UpdateRange(XrdOssDF *const fd, const void *buff, const off_
    return ret;
 }
 
+// Used by Read.
+//
 ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssCsiRangeGuard &rg)
 {
    EPNAME("VerifyRange");
@@ -253,16 +258,30 @@ ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const 
    return vret;
 }
 
+// apply_sequential_aligned_modify: Internal func used during Write/pgWrite
+//                                  (both aligned/unaligned cases) to update multiple tags.
+//
+// Write series of crc32c values to a file's tag file, with optional pre-block or lastblock
+// values. Tries to reduce the number of calls to WriteTags() by using an internal buffer
+// to make all the crc32c values available from a contiguous start location.
+//
+// buff:        start of data buffer: Page aligned within the file, used if calculating crc32
+// startp:      page index corresponding to the start of buff
+// nbytes:      length of buffer
+// csvec:       optional pre-computed crc32 values covering nbytes of buffer
+// preblockset: true/false. A value for a crc32 value to be placed at startp-1
+// lastblockset:true/false. If true the last page of buff must be partial, and instead of
+//                          calculating or fetching a crc32 value from csvec[], a supplied
+//                          value is used.
+// cspre:       value to use for preblock crc32 (used if preblockset is true)
+// cslast:      value to use for last partial-block crc32 (used if lastblockset is true)
+// 
 ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
-   const void *const buff, const off_t startp, const size_t nbytes, uint32_t *csvec,
+   const void *const buff, const off_t startp, const size_t nbytes, const uint32_t *csvec,
    const bool preblockset, const bool lastblockset, const uint32_t cspre, const uint32_t cslast)
 {
    EPNAME("apply_sequential_aligned_modify");
 
-   if (csvec && (preblockset || lastblockset))
-   {
-      return -EINVAL;
-   }
    if (lastblockset && (nbytes % XrdSys::PageSize)==0)
    {
       return -EINVAL;
@@ -276,6 +295,13 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
    const size_t calcbufsz = sizeof(calcbuf)/sizeof(uint32_t);
    const uint8_t *const p = (uint8_t*)buff;
 
+   // will be using calcbuf
+   bool useinternal = true;
+   if (csvec && !preblockset && !lastblockset)
+   {
+      useinternal = false;
+   }
+
    bool dopre = preblockset;
    const off_t sp = preblockset ? startp-1 : startp;
 
@@ -285,7 +311,7 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
    while(blktowrite>0)
    {
       size_t blkwcnt = blktowrite;
-      if (!csvec)
+      if (useinternal)
       {
          size_t cidx = 0;
          size_t calcbycnt = nbytes - calcbytot;
@@ -309,10 +335,17 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
             calcbycnt = XrdSys::PageSize * x;
             calcbuf[cidx + x] = cslast;
          }
-         XrdOucCRC::Calc32C(&p[calcbytot], calcbycnt, &calcbuf[cidx]);
+         if (csvec)
+         {
+            memcpy(&calcbuf[cidx], &csvec[calcbytot/XrdSys::PageSize], 4*((calcbycnt+XrdSys::PageSize-1)/XrdSys::PageSize));
+         }
+         else
+         {
+            XrdOucCRC::Calc32C(&p[calcbytot], calcbycnt, &calcbuf[cidx]);
+         }
          calcbytot += calcbycnt;
       }
-      const ssize_t wret = ts_->WriteTags(csvec ? &csvec[nblkwritten] : calcbuf, sp+nblkwritten, blkwcnt);
+      const ssize_t wret = ts_->WriteTags(useinternal ? calcbuf : &csvec[nblkwritten], sp+nblkwritten, blkwcnt);
       if (wret<0)
       {
          TRACE(Warn, "Error writing tags for " << fn_ << " pages " << (sp+nblkwritten) << " to " << (sp+nblkwritten+blkwcnt-1) << " error=" << wret);
@@ -324,6 +357,12 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
    return nblkwritten;
 }
 
+//
+// FetchRangeAligned
+//
+// Used by pgRead or Read (via VerifyRangeAligned) when the read offset is at a page boundary within the file
+// AND the length is a multiple of page size or the read is up to the end of file.
+//
 ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t & /* sizes */, uint32_t *const csvec, const uint64_t opts)
 {
    EPNAME("FetchRangeAligned");
@@ -432,6 +471,8 @@ int XrdOssCsiPages::StoreRangeAligned(const void *const buff, const off_t offset
    return 0;
 }
 
+// Used by Read for aligned reads. See StoreRangeAligned for conditions.
+//
 int XrdOssCsiPages::UpdateRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
    return StoreRangeAligned(buff, offset, blen, sizes, NULL);
@@ -567,6 +608,8 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
    return 0;
 }
 
+// used by pgRead
+//
 ssize_t XrdOssCsiPages::FetchRange(
    XrdOssDF *const /* fd */, const void *buff, const off_t offset, const size_t blen,
    uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
@@ -619,7 +662,9 @@ ssize_t XrdOssCsiPages::FetchRange(
    return FetchRangeAligned(buff,offset,blen,sizes,csvec,opts);
 }
 
-int XrdOssCsiPages::StoreRange(XrdOssDF *const /* fd */, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
+// Used by pgWrite
+//
+int XrdOssCsiPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
 {
    if (offset<0)
    {
@@ -631,16 +676,13 @@ int XrdOssCsiPages::StoreRange(XrdOssDF *const /* fd */, const void *buff, const
       return 0;
    }
 
-   // these methods require page aligned offset.
-   if ((offset & XrdSys::PageMask)) return -EINVAL;
-
    // if the tag file is missing there is nothing to store
    // but do calculate checksums to return, if requested to do so
    if (hasMissingTags_)
    {
       if (csvec && (opts & XrdOssDF::doCalc))
       {
-         XrdOucCRC::Calc32C((void *)buff, blen, csvec);
+         pgWriteDoCalc(buff, offset, blen, csvec);
       }
       return blen;
    }
@@ -648,16 +690,10 @@ int XrdOssCsiPages::StoreRange(XrdOssDF *const /* fd */, const void *buff, const
    const Sizes_t sizes = rg.getTrackinglens();
    const off_t trackinglen = sizes.first;
 
-   // blen must be multiple of pagesize or short for page at eof
-   if ((blen % XrdSys::PageSize) != 0 && offset+blen < static_cast<size_t>(trackinglen))
-   {
-      return -EINVAL;
-   }
-
-   // pgWrite is documented to fail if one writes at an offset past a previous pgWrite
-   // that filled a partial page at the EOF. We try to match this here (although this
-   // will also apply if a previous Write has left the EOF not page aligned).
-   if ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen)
+   // in the original specification of pgWrite there was the idea of a logical-eof, set by
+   // the a pgWrite with non-page aligned length: We support an option to approximate that
+   // by disallowing pgWrite past the current (non page aligned) eof.
+   if (disablePgExtend_ && (trackinglen % XrdSys::PageSize) !=0 && offset+blen > static_cast<size_t>(trackinglen))
    {
       return -ESPIPE;
    }
@@ -665,7 +701,7 @@ int XrdOssCsiPages::StoreRange(XrdOssDF *const /* fd */, const void *buff, const
    // if doCalc is set and we have a csvec buffer fill it with calculated values
    if (csvec && (opts & XrdOssDF::doCalc))
    {
-      XrdOucCRC::Calc32C((void *)buff, blen, csvec);
+      pgWriteDoCalc(buff, offset, blen, csvec);
    }
 
    // if no vector of crc have been given then mark this file as having unverified checksums
@@ -680,7 +716,19 @@ int XrdOssCsiPages::StoreRange(XrdOssDF *const /* fd */, const void *buff, const
       rg.unlockTrackinglen();
    }
 
-   return StoreRangeAligned(buff,offset,blen,sizes,csvec);
+   int ret;
+   if ((offset % XrdSys::PageSize) != 0 ||
+       (offset+blen < static_cast<size_t>(trackinglen) && (blen % XrdSys::PageSize) != 0) ||
+       ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen))
+   {
+      ret = StoreRangeUnaligned(fd,buff,offset,blen,sizes,csvec,opts);
+   }
+   else
+   {
+      ret = StoreRangeAligned(buff,offset,blen,sizes,csvec);
+   }
+
+   return ret;
 }
 
 int XrdOssCsiPages::VerificationStatus()
@@ -699,4 +747,39 @@ int XrdOssCsiPages::VerificationStatus()
       return XrdOss::PF_csVer;
    }
    return XrdOss::PF_csVun;
+}
+
+void XrdOssCsiPages::pgWriteDoCalc(const void *buffer, off_t offset, size_t wrlen, uint32_t *csvec)
+{
+   const size_t p_off = offset % XrdSys::PageSize;
+   const size_t p_alen = (p_off > 0) ? (XrdSys::PageSize - p_off) : wrlen;
+   if (p_alen < wrlen)
+   {
+      XrdOucCRC::Calc32C((uint8_t *)buffer+p_alen, wrlen-p_alen, &csvec[1]);
+   }
+   XrdOucCRC::Calc32C((void*)buffer, std::min(p_alen, wrlen), csvec);
+}
+
+int XrdOssCsiPages::pgWritePrelockCheck(const void *buffer, off_t offset, size_t wrlen, const uint32_t *csvec, uint64_t opts)
+{
+   // do verify before taking locks to allow for faster fail
+   if (csvec && (opts & XrdOssDF::Verify))
+   {
+      uint32_t valcs;
+      const size_t p_off = offset % XrdSys::PageSize;
+      const size_t p_alen = (p_off > 0) ? (XrdSys::PageSize - p_off) : wrlen;
+      if (p_alen < wrlen)
+      {
+         if (XrdOucCRC::Ver32C((uint8_t *)buffer+p_alen, wrlen-p_alen, &csvec[1], valcs)>=0)
+         {
+            return -EDOM;
+         }
+      }
+      if (XrdOucCRC::Ver32C((void*)buffer, std::min(p_alen, wrlen), csvec, valcs)>=0)
+      {
+         return -EDOM;
+      }
+   }
+
+   return 0;
 }

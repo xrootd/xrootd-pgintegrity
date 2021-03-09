@@ -27,6 +27,7 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
+#include "XrdOuc/XrdOucCRC.hh"
 #include "XrdOss/XrdOss.hh"
 #include "XrdOss/XrdOssDefaultSS.hh"
 #include "XrdOuc/XrdOucEnv.hh"
@@ -71,11 +72,16 @@ public:
       ssize_t res=0;
       switch(rand() % 4) {
         case 0:
-          off &= 0xfffff000;
-          len &= 0xfffff000;
-          res = file->pgWrite(&m_b[bufidx],off,len,NULL,0);
-          // pgWrite can fail if current EOF if not on page boundary
-          if (res==-ESPIPE) res=0;
+          {
+            uint32_t crcv[(len+4095)/4096 + 1];
+            const size_t p_off = off % 4096;
+            const size_t p_alen = (p_off > 0) ? (4096 - p_off) : len;
+            if (p_alen < len) {
+              XrdOucCRC::Calc32C((void*)&m_b[bufidx+p_alen], len-p_alen, &crcv[1]);
+            }
+            XrdOucCRC::Calc32C((void*)&m_b[bufidx], std::min(p_alen, len), crcv);
+            res = file->pgWrite(&m_b[bufidx],off,len,crcv,0);
+          }
           break;
         case 1:
           off &= 0xfffff000;

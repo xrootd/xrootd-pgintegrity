@@ -162,7 +162,7 @@ class XrdOssCsiConfig
 {
 public:
 
-  XrdOssCsiConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true) { }
+  XrdOssCsiConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true), disablePgExtend_(false) { }
   ~XrdOssCsiConfig() { }
 
   int Init(XrdSysError &, const char *, const char *, XrdOucEnv *);
@@ -172,6 +172,8 @@ public:
   std::string xrdtSpaceName() const { return xrdtSpaceName_; }
 
   bool allowMissingTags() const { return allowMissingTags_; }
+
+  bool disablePgExtend() const { return disablePgExtend_; }
 
   TagPath tagParam_;
 
@@ -185,6 +187,7 @@ private:
   bool fillFileHole_;
   std::string xrdtSpaceName_;
   bool allowMissingTags_;
+  bool disablePgExtend_;
 };
 
 #endif

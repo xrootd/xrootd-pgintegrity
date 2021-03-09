@@ -53,4 +53,10 @@ directories to match the datafiles. By default the base directory is
 "/.xrdt". The syntax "prefix=" with no value has the special meaning that
 the .xrdt files will be stored inside the same directories as the datafiles.
 Accessing or listing the .xrdt files through xrootd is not supported.
+
+nopgextend
+This option prevents pgWrite from writing past the current end-of-file
+when the file length is not a multiple of the page size. This approximates
+the behaviour of an original version of pgWrite. The check is not applied
+in case of a missing tagfile.
 ```

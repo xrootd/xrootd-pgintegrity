@@ -98,16 +98,17 @@ int XrdOssCsiFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
    if (rdonly_) return -EBADF;
    uint64_t pgopts = opts;
 
-   // do verify	before taking locks to allow for fast fail
-   if (aioparm->cksVec && (opts & XrdOssDF::Verify))
+   const int prec = XrdOssCsiPages::pgWritePrelockCheck(
+          (void *)aioparm->sfsAio.aio_buf,
+          (off_t)aioparm->sfsAio.aio_offset,
+          (size_t)aioparm->sfsAio.aio_nbytes,
+          aioparm->cksVec,
+          opts);
+   if (prec < 0)
    {
-      uint32_t valcs;
-      if (XrdOucCRC::Ver32C((void *)aioparm->sfsAio.aio_buf, (size_t)aioparm->sfsAio.aio_nbytes, (uint32_t*)aioparm->cksVec, valcs)>=0)
-      {
-         return -EDOM;
-      }
+      return prec;
    }
-
+          
    XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, pgopts, false);
    // pages will be locked when write is scheduled

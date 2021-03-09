@@ -258,7 +258,7 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
 
    std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident));
    std::unique_ptr<XrdOssCsiTagstore> ts(new XrdOssCsiTagstoreFile(pmi_->dpath, std::move(integFile), tident));
-   std::unique_ptr<XrdOssCsiPages> pages(new XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), tident));
+   std::unique_ptr<XrdOssCsiPages> pages(new XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), config_.disablePgExtend(), tident));
 
    int puret = pages->Open(pmi_->tpath.c_str(), dsize, tagFlags, *tagEnv);
    if (puret<0)
@@ -518,14 +518,10 @@ ssize_t XrdOssCsiFile::pgWrite(void *buffer, off_t offset, size_t wrlen, uint32_
    if (rdonly_) return -EBADF;
    uint64_t pgopts = opts;
 
-   // do verify before taking locks to allow for faster fail
-   if (csvec && (opts & XrdOssDF::Verify))
+   const int prec = XrdOssCsiPages::pgWritePrelockCheck(buffer, offset, wrlen, csvec, opts);
+   if (prec < 0)
    {
-      uint32_t valcs;
-      if (XrdOucCRC::Ver32C((void *)buffer, wrlen, csvec, valcs)>=0)
-      {
-         return -EDOM;
-      }
+      return prec;
    }
 
    XrdOssCsiRangeGuard rg;

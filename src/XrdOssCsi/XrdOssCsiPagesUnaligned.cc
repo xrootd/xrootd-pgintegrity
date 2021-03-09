@@ -40,6 +40,14 @@
 extern XrdOucTrace  OssCsiTrace;
 static const uint8_t g_bz[XrdSys::PageSize] = {0};
 
+//
+// UpdateRangeHoleUntilPage
+//
+// Used pgWrite/Write (both aligned and unaligned cases) when extending a file
+// with implied zeros after then current end of file and the new one.
+// fd (data file descriptor pointer) required only when last page in file is partial.
+//   current implementation does not use fd in this case, but requires it be set.
+//
 int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, const Sizes_t &sizes)
 {
    EPNAME("UpdateRangeHoleUntilPage");
@@ -101,9 +109,199 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
    return 0;
 }
 
+// UpdateRangeUnaligned
+// 
+// Used by Write for various cases with mis-alignment that need checksum recalculation. See StoreRangeUnaligned for list of conditions.
+//
 int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
-   EPNAME("UpdateRangeUnaligned");
+   return StoreRangeUnaligned(fd, buff, offset, blen, sizes, NULL, 0);
+}
+
+//
+// used by StoreRangeUnaligned when the supplied data does not cover the whole of the first corresponding page in the file
+//
+int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void *const buff, const size_t bavail,
+                                                 const off_t offset, const off_t trackinglen,
+                                                 const uint32_t *const csvec, const uint64_t opts, uint32_t &prepageval)
+{
+   EPNAME("StoreRangeUnaligned_preblock");
+   const off_t p1 = offset / XrdSys::PageSize;
+   const size_t p1_off = offset % XrdSys::PageSize;
+
+   const off_t tracked_page = trackinglen / XrdSys::PageSize;
+   const size_t tracked_off = trackinglen % XrdSys::PageSize;
+
+   if (p1 > tracked_page)
+   {
+      // the start of will have a number of implied zero bytes
+      uint32_t crc32c;
+      if (p1_off == 0)
+      {
+         crc32c = csvec ? csvec[0] : XrdOucCRC::Calc32C(buff, bavail, 0U);
+      }
+      else
+      {
+         // if given the crc32c for the unaligned first page we don't use it directly,
+         // so make sure it is verified before recalulating based on the buffer
+         if (csvec && !(opts & XrdOssDF::doCalc) && !(opts & XrdOssDF::Verify))
+         {
+            crc32c = XrdOucCRC::Calc32C(buff, bavail, 0U);
+            if (crc32c != csvec[0])
+            {
+              TRACE(Warn, "CRC error " << fn_ << " in partial page update starting at offset " << offset);
+              return -EDOM;
+            }
+         }
+         crc32c = XrdOucCRC::Calc32C(g_bz, p1_off, 0U);
+         crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
+      }
+      prepageval = crc32c;
+      return 0;
+   }
+
+   // the case (p1 == tracked_page && p1_off == 0 && bavail >= tracked_off) would not need
+   // the read-modify-write cycle. However this case is sent to the aligned version of update.
+   // Therefore it is not tested and optimised for here.
+
+   // if given the crc32c for the unaligned first page we don't use it directly,
+   // so make sure it is verified before recalulating based on the buffer
+   if (csvec && !(opts & XrdOssDF::doCalc) && !(opts & XrdOssDF::Verify))
+   {
+      uint32_t crc32c = XrdOucCRC::Calc32C(buff, bavail, 0U);
+      if (crc32c != csvec[0])
+      {
+        TRACE(Warn, "CRC error " << fn_ << " in partial page update (2) starting at offset " << offset);
+        return -EDOM;
+      }
+   }
+
+   uint8_t b[XrdSys::PageSize];
+   if (p1 == tracked_page && p1_off >= tracked_off)
+   {
+      // appending: with or without some implied zeros.
+      // can recalc crc with new data without re-reading existing partial block's data
+      uint32_t crc32v = 0;
+      if (tracked_off > 0)
+      {
+         const ssize_t rret = ts_->ReadTags(&crc32v, p1, 1);
+         if (rret<0)
+         {
+            TRACE(Warn, "Error reading tag (append) for " << fn_ << " page " << p1 << " error=" << rret);
+            return rret;
+         }
+      }
+      const size_t nz = p1_off - tracked_off;
+      uint32_t crc32c = crc32v;
+      if (nz>0) crc32c = XrdOucCRC::Calc32C(g_bz, nz, crc32c);
+      crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
+      prepageval = crc32c;
+      return 0;
+   }
+
+   // read some preexisting data
+   const size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
+
+   // assert we're overwriting some (or all) of the previous data.
+   // append or write after data case was covered above, total overwrite would be sent to aligned case
+   assert(p1_off < toread);
+   if (toread>0)
+   {
+      ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
+      if (rret<0)
+      {
+         TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
+         return -EIO;
+      }
+      const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
+      uint32_t crc32v;
+      rret = ts_->ReadTags(&crc32v, p1, 1);
+      if (rret<0)
+      {
+         TRACE(Warn, "Error reading tag for " << fn_ << " page " << p1 << " error=" << rret);
+         return rret;
+      }
+      if (crc32v != crc32c)
+      {
+         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p1);
+         return -EDOM;
+      }
+   }
+   memcpy(&b[p1_off], buff, bavail);
+   const uint32_t crc32c = XrdOucCRC::Calc32C(b, std::max(p1_off+bavail, toread), 0U);
+   prepageval = crc32c;
+   return 0;
+}
+
+//
+// used by StoreRangeUnaligned when the end of supplied data does align to a page in the file and is before the end of file
+//
+int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void *const buff, const size_t blen,
+                                                  const off_t offset, const off_t trackinglen,
+                                                  const uint32_t *const csvec, const uint64_t opts, uint32_t &lastpageval)
+{
+   EPNAME("StoreRangeUnaligned_postblock");
+
+   const uint8_t *const p = (uint8_t*)buff;
+   const off_t p2 = (offset+blen) / XrdSys::PageSize;
+   const size_t p2_off = (offset+blen) % XrdSys::PageSize;
+
+   const off_t tracked_page = trackinglen / XrdSys::PageSize;
+   const size_t tracked_off = trackinglen % XrdSys::PageSize;
+
+   // if given csvec the last one will not be used directly,
+   // so use it to cross check data
+   if (csvec && !(opts & XrdOssDF::doCalc) && !(opts & XrdOssDF::Verify))
+   {
+      uint32_t crc32c = XrdOucCRC::Calc32C(&p[blen-p2_off], p2_off, 0U);
+      if (crc32c != csvec[(blen-1)/XrdSys::PageSize])
+      {
+        TRACE(Warn, "CRC error " << fn_ << " in partial page update starting at offset " << offset+blen-p2_off);
+        return -EDOM;
+      }
+   }
+
+   // how much of existing data needs to be read to update last page
+   const size_t toread = (p2==tracked_page) ? tracked_off : XrdSys::PageSize;
+   uint8_t b[XrdSys::PageSize];
+   if (toread>0)
+   {
+      ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p2, toread);
+      if (rret<0)
+      {
+         TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
+         return -EIO;
+      }
+      const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
+      uint32_t crc32v;
+      rret = ts_->ReadTags(&crc32v, p2, 1);
+      if (rret<0)
+      {
+         TRACE(Warn, "Error reading tag for " << fn_ << " page " << p2 << " error=" << rret);
+         return rret;
+      }
+      if (crc32v != crc32c)
+      {
+         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p2);
+         return -EDOM;
+      }
+   }
+   memcpy(b,&p[blen-p2_off],p2_off);
+   lastpageval = XrdOucCRC::Calc32C(b, std::max(p2_off,toread), 0U);
+   return 0;
+}
+
+//
+// StoreRangeUnaligned
+// 
+// Used by pgWrite or Write (via UpdateRangeUnaligned) where the start of this update is not page aligned within the file
+// OR where the end of this update is before the end of the file and is not page aligned
+// OR where end of the file is not page aligned and this update starts after it
+// i.e. where checksums of last current page of file, or the first or last blocks after writing this buffer will need to be recomputed
+//
+int XrdOssCsiPages::StoreRangeUnaligned(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, const Sizes_t &sizes, const uint32_t *const csvec, uint64_t opts)
+{
+   EPNAME("StoreRangeUnaligned");
    const off_t p1 = offset / XrdSys::PageSize;
 
    const off_t trackinglen = sizes.first;
@@ -118,11 +316,7 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
    }
 
    const size_t p1_off = offset % XrdSys::PageSize;
-   const off_t p2 = (offset+blen) / XrdSys::PageSize;
    const size_t p2_off = (offset+blen) % XrdSys::PageSize;
-
-   const off_t tracked_page = trackinglen / XrdSys::PageSize;
-   const size_t tracked_off = trackinglen % XrdSys::PageSize;
 
    bool hasprepage = false;
    uint32_t prepageval;
@@ -131,89 +325,12 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
    if ( p1_off>0 || blen < static_cast<size_t>(XrdSys::PageSize) )
    {
       const size_t bavail = (XrdSys::PageSize-p1_off > blen) ? blen : (XrdSys::PageSize-p1_off);
-      if (p1 > tracked_page)
+      const int ret = StoreRangeUnaligned_preblock(fd, buff, bavail, offset, trackinglen, csvec, opts, prepageval);
+      if (ret<0)
       {
-         // the start of will have a number of implied zero bytes
-         uint32_t crc32c;
-         if (p1_off == 0)
-         {
-            crc32c = XrdOucCRC::Calc32C(buff, bavail, 0U);
-         }
-         else
-         {
-            crc32c = XrdOucCRC::Calc32C(g_bz, p1_off, 0U);
-            crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
-         }
-         hasprepage = true;
-         prepageval = crc32c;
+         return ret;
       }
-      else
-      {
-         // the case (p1 == tracked_page && p1_off == 0 && bavail >= tracked_off) would not need
-         // the read-modify-write cycle. However this case is sent to the aligned version of update.
-         // Therefore it is not tested and optimised for here.
-
-         uint8_t b[XrdSys::PageSize];
-         if (p1 == tracked_page && p1_off >= tracked_off)
-         {
-            // appending: with or without some implied zeros.
-            // can recalc crc with new data without re-reading existing partial block's data
-            uint32_t crc32v = 0;
-            if (tracked_off > 0)
-            {
-               const ssize_t rret = ts_->ReadTags(&crc32v, p1, 1);
-               if (rret<0)
-               {
-                  TRACE(Warn, "Error reading tag (append) for " << fn_ << " page " << p1 << " error=" << rret);
-                  return rret;
-               }
-            }
-            const size_t nz = p1_off - tracked_off;
-            uint32_t crc32c = crc32v;
-            if (nz>0) crc32c = XrdOucCRC::Calc32C(g_bz, nz, crc32c);
-            crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
-            hasprepage = true;
-            prepageval = crc32c;
-         }
-         else
-         {
-           // read some preexisting data and/or implied zero bytes
-           const size_t toread = (p1==tracked_page) ? tracked_off : XrdSys::PageSize;
-
-           // assert we're overwriting some (or all) of the previous data.
-           // append or write after data case was covered above, total overwrite would be sent to aligned case
-           assert(p1_off < toread);
-           if (toread>0)
-           {
-              ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, toread);
-              if (rret<0)
-              {
-                 TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
-                 return -EIO;
-              }
-              const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
-              uint32_t crc32v;
-              rret = ts_->ReadTags(&crc32v, p1, 1);
-              if (rret<0)
-              {
-                 TRACE(Warn, "Error reading tag for " << fn_ << " page " << p1 << " error=" << rret);
-                 return rret;
-              }
-              if (crc32v != crc32c)
-              {
-                 TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p1);
-                 return -EDOM;
-              }
-           }
-           memcpy(&b[p1_off], buff, bavail);
-           const uint32_t crc32c = XrdOucCRC::Calc32C(b, std::max(p1_off+bavail, toread), 0U);
-           hasprepage = true;
-           prepageval = crc32c;
-         }
-      }
-      // this was a partial first page: we must have calculated
-      // a pre-page value
-      assert(hasprepage == true);
+      hasprepage = true;
    }
 
    // next page (if any)
@@ -238,12 +355,14 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
    }
 
    const uint8_t *const p = (uint8_t*)buff;
+   const uint32_t *csp = csvec;
+   if (csp && hasprepage) csp++;
 
    // see if there will be no old data to account for in the last page
    if (p2_off == 0 || (offset + blen >= static_cast<size_t>(trackinglen)))
    {
-      // write prepage, calc and write full pages and last partial page
-      const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, NULL, hasprepage, false, prepageval, 0U);
+      // write any precomputed prepage, then write full pages and last partial page (computing or using supplied csvec)
+      const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, csp, hasprepage, false, prepageval, 0U);
       if (aret<0)
       {
          TRACE(Warn, "Error updating tags, error=" << aret);
@@ -253,35 +372,16 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
    }
 
    // last page contains existing data that has to be read to modify it
-   const size_t toread = (p2==tracked_page) ? tracked_off : XrdSys::PageSize;
-   uint8_t b[XrdSys::PageSize];
-   if (toread>0)
-   {
-      ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p2, toread);
-      if (rret<0)
-      {
-         TRACE(Warn, "Error reading data (2) from " << fn_ << " result " << rret);
-         return -EIO;
-      }
-      const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
-      uint32_t crc32v;
-      rret = ts_->ReadTags(&crc32v, p2, 1);
-      if (rret<0)
-      {
-         TRACE(Warn, "Error reading tag (2) for " << fn_ << " page " << p2 << " error=" << rret);
-         return rret;
-      }
-      if (crc32v != crc32c)
-      {
-         TRACE(Warn, "CRC error " << fn_ << " in page (2) starting at offset " << XrdSys::PageSize*p2);
-         return -EDOM;
-      }
-   }
-   memcpy(b,&p[blen-p2_off],p2_off);
-   const uint32_t lastpageval = XrdOucCRC::Calc32C(b, std::max(p2_off,toread), 0U);
 
-   // write prepage, calculate and write full pages, and write precomputed last page
-   const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, NULL, hasprepage, true, prepageval, lastpageval);
+   uint32_t lastpageval;
+   const int ret = StoreRangeUnaligned_postblock(fd, &p[npoff], blen-npoff, offset+npoff, trackinglen, csp, opts, lastpageval);
+   if (ret<0)
+   {
+      return ret;
+   }
+
+   // write any precomputed prepage, then write full pages (computing or using supplied csvec) and finally write precomputed last page
+   const ssize_t aret = apply_sequential_aligned_modify(&p[npoff], np, blen-npoff, csp, hasprepage, true, prepageval, lastpageval);
    if (aret<0)
    {
       TRACE(Warn, "Error updating tags, error=" << aret);
@@ -291,6 +391,12 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
    return 0;
 }
 
+//
+// VerifyRangeUnaligned
+//
+// Used by Read when reading a range not starting at a page boundary within the file
+// OR when the length is not a multiple of the size and the read finishes before the end of file.
+//
 ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
    EPNAME("VerifyRangeUnaligned");

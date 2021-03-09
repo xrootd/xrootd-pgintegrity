@@ -44,7 +44,7 @@ class XrdOssCsiPages
 public:
    typedef std::pair<off_t,off_t> Sizes_t;
 
-   XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, const char *);
+   XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, bool dpe, const char *);
    ~XrdOssCsiPages() { (void)Close(); }
 
    int Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP);
@@ -66,13 +66,17 @@ public:
    void TrackedSizeRelease();
    int VerificationStatus();
 
+   static void pgWriteDoCalc(const void *, off_t, size_t, uint32_t *);
+   static int pgWritePrelockCheck(const void *, off_t, size_t, const uint32_t *, uint64_t);
+
 protected:
-   ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, uint32_t *, bool, bool, uint32_t, uint32_t);
+   ssize_t apply_sequential_aligned_modify(const void *, off_t, size_t, const uint32_t *, bool, bool, uint32_t, uint32_t);
    std::unique_ptr<XrdOssCsiTagstore> ts_;
    XrdSysMutex rangeaddmtx_;
    XrdOssCsiRanges ranges_;
    bool writeHoles_;
    bool allowMissingTags_;
+   bool disablePgExtend_;
    bool hasMissingTags_;
    bool rdonly_;
 
@@ -94,6 +98,10 @@ protected:
    ssize_t VerifyRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
    ssize_t FetchRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
    int StoreRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *);
+   int StoreRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &, const uint32_t *, uint64_t);
+   int StoreRangeUnaligned_preblock(XrdOssDF *, const void *, size_t, off_t, off_t, const uint32_t *, uint64_t, uint32_t &);
+   int StoreRangeUnaligned_postblock(XrdOssDF *, const void *, size_t, off_t, off_t, const uint32_t *, uint64_t, uint32_t &);
+
 
    static ssize_t fullread(XrdOssDF *fd, void *buff, const off_t off , const size_t sz)
    {
