@@ -704,8 +704,9 @@ int XrdOssCsiPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t
       pgWriteDoCalc(buff, offset, blen, csvec);
    }
 
-   // if no vector of crc have been given then mark this file as having unverified checksums
-   if (!csvec || (opts & XrdOssDF::doCalc))
+   // if no vector of crc have been given and not specifically requested to calculate,
+   // then mark this file as having unverified checksums
+   if (!csvec && !(opts & XrdOssDF::doCalc))
    {
       LockMakeUnverified();
    }

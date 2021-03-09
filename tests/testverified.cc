@@ -226,13 +226,19 @@ TEST_F(osscsi_verifiedTest,downgrade3) {
   memset(&sbuff,0,sizeof(sbuff));
   m_oss->StatPF(TMPFN, &sbuff, XrdOss::PF_dStat);
   ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVer);
-  // downgrade because of doCalc on pgWrite
+  // not downgraded because of doCalc on pgWrite
   ret = m_file->pgWrite(m_b, 0, 8192, csvec2, XrdOssDF::doCalc);
   ASSERT_TRUE(ret == 8192);
   memset(&sbuff,0,sizeof(sbuff));
   m_oss->StatPF(TMPFN, &sbuff, XrdOss::PF_dStat);
-  ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVun);
+  ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVer);
   ASSERT_TRUE(memcmp(csvec, csvec2, 8)==0);
+  // still not downgraded because of doCalc on pgWrite
+  ret = m_file->pgWrite(m_b, 0, 8192, NULL, XrdOssDF::doCalc);
+  ASSERT_TRUE(ret == 8192);
+  memset(&sbuff,0,sizeof(sbuff));
+  m_oss->StatPF(TMPFN, &sbuff, XrdOss::PF_dStat);
+  ASSERT_TRUE(sbuff.st_rdev == XrdOss::PF_csVer);
 }
 
 TEST_F(osscsi_verifiedTest,nochecksums) {
