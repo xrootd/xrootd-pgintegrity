@@ -40,6 +40,14 @@
 extern XrdOucTrace  OssCsiTrace;
 static const uint8_t g_bz[XrdSys::PageSize] = {0};
 
+// this is a local utility function for now
+static uint32_t crc32c_combine(uint32_t crc1, uint32_t crc2, size_t len2)
+{
+   const uint32_t c1 = XrdOucCRC::Calc32C(g_bz, len2, 0U);
+   const uint32_t c2 = XrdOucCRC::Calc32C(g_bz, len2, crc1);
+   return c1^c2^crc2;
+}
+
 //
 // UpdateRangeHoleUntilPage
 //
@@ -115,7 +123,7 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
 //
 int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
-   return StoreRangeUnaligned(fd, buff, offset, blen, sizes, NULL, 0);
+   return StoreRangeUnaligned(fd, buff, offset, blen, sizes, NULL);
 }
 
 //
@@ -123,7 +131,7 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
 //
 int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void *const buff, const size_t bavail,
                                                  const off_t offset, const off_t trackinglen,
-                                                 const uint32_t *const csvec, const uint64_t opts, uint32_t &prepageval)
+                                                 const uint32_t *const csvec, uint32_t &prepageval)
 {
    EPNAME("StoreRangeUnaligned_preblock");
    const off_t p1 = offset / XrdSys::PageSize;
@@ -135,25 +143,13 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
    if (p1 > tracked_page)
    {
       // the start of will have a number of implied zero bytes
-      uint32_t crc32c;
-      if (p1_off == 0)
+      uint32_t crc32c = XrdOucCRC::Calc32C(g_bz, p1_off, 0U);
+      if (csvec)
       {
-         crc32c = csvec ? csvec[0] : XrdOucCRC::Calc32C(buff, bavail, 0U);
+         crc32c = crc32c_combine(crc32c, csvec[0], bavail);
       }
       else
       {
-         // if given the crc32c for the unaligned first page we don't use it directly,
-         // so make sure it is verified before recalulating based on the buffer
-         if (csvec && !(opts & XrdOssDF::doCalc) && !(opts & XrdOssDF::Verify))
-         {
-            crc32c = XrdOucCRC::Calc32C(buff, bavail, 0U);
-            if (crc32c != csvec[0])
-            {
-              TRACE(Warn, "CRC error " << fn_ << " in partial page update starting at offset " << offset);
-              return -EDOM;
-            }
-         }
-         crc32c = XrdOucCRC::Calc32C(g_bz, p1_off, 0U);
          crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
       }
       prepageval = crc32c;
@@ -163,18 +159,6 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
    // the case (p1 == tracked_page && p1_off == 0 && bavail >= tracked_off) would not need
    // the read-modify-write cycle. However this case is sent to the aligned version of update.
    // Therefore it is not tested and optimised for here.
-
-   // if given the crc32c for the unaligned first page we don't use it directly,
-   // so make sure it is verified before recalulating based on the buffer
-   if (csvec && !(opts & XrdOssDF::doCalc) && !(opts & XrdOssDF::Verify))
-   {
-      uint32_t crc32c = XrdOucCRC::Calc32C(buff, bavail, 0U);
-      if (crc32c != csvec[0])
-      {
-        TRACE(Warn, "CRC error " << fn_ << " in partial page update (2) starting at offset " << offset);
-        return -EDOM;
-      }
-   }
 
    uint8_t b[XrdSys::PageSize];
    if (p1 == tracked_page && p1_off >= tracked_off)
@@ -193,8 +177,15 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
       }
       const size_t nz = p1_off - tracked_off;
       uint32_t crc32c = crc32v;
-      if (nz>0) crc32c = XrdOucCRC::Calc32C(g_bz, nz, crc32c);
-      crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
+      crc32c = XrdOucCRC::Calc32C(g_bz, nz, crc32c);
+      if (csvec)
+      {
+         crc32c = crc32c_combine(crc32c, csvec[0], bavail);
+      }
+      else
+      {
+         crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
+      }
       prepageval = crc32c;
       return 0;
    }
@@ -227,18 +218,32 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
          return -EDOM;
       }
    }
-   memcpy(&b[p1_off], buff, bavail);
-   const uint32_t crc32c = XrdOucCRC::Calc32C(b, std::max(p1_off+bavail, toread), 0U);
+
+   uint32_t crc32c = XrdOucCRC::Calc32C(b, p1_off, 0U);
+   if (csvec)
+   {
+      crc32c = crc32c_combine(crc32c, csvec[0], bavail);
+   }
+   else
+   {
+      crc32c = XrdOucCRC::Calc32C(buff, bavail, crc32c);
+   }
+   if (p1_off+bavail < toread)
+   {
+      const uint32_t cl = XrdOucCRC::Calc32C(&b[p1_off+bavail], toread-p1_off-bavail, 0U);
+      crc32c = crc32c_combine(crc32c, cl, toread-p1_off-bavail);
+   }
    prepageval = crc32c;
    return 0;
 }
 
 //
-// used by StoreRangeUnaligned when the end of supplied data does align to a page in the file and is before the end of file
+// used by StoreRangeUnaligned when the end of supplied data is not page aligned
+// and is before the end of file
 //
 int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void *const buff, const size_t blen,
                                                   const off_t offset, const off_t trackinglen,
-                                                  const uint32_t *const csvec, const uint64_t opts, uint32_t &lastpageval)
+                                                  const uint32_t *const csvec, uint32_t &lastpageval)
 {
    EPNAME("StoreRangeUnaligned_postblock");
 
@@ -248,18 +253,6 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
 
    const off_t tracked_page = trackinglen / XrdSys::PageSize;
    const size_t tracked_off = trackinglen % XrdSys::PageSize;
-
-   // if given csvec the last one will not be used directly,
-   // so use it to cross check data
-   if (csvec && !(opts & XrdOssDF::doCalc) && !(opts & XrdOssDF::Verify))
-   {
-      uint32_t crc32c = XrdOucCRC::Calc32C(&p[blen-p2_off], p2_off, 0U);
-      if (crc32c != csvec[(blen-1)/XrdSys::PageSize])
-      {
-        TRACE(Warn, "CRC error " << fn_ << " in partial page update starting at offset " << offset+blen-p2_off);
-        return -EDOM;
-      }
-   }
 
    // how much of existing data needs to be read to update last page
    const size_t toread = (p2==tracked_page) ? tracked_off : XrdSys::PageSize;
@@ -286,8 +279,14 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
          return -EDOM;
       }
    }
-   memcpy(b,&p[blen-p2_off],p2_off);
-   lastpageval = XrdOucCRC::Calc32C(b, std::max(p2_off,toread), 0U);
+
+   uint32_t crc32c = csvec ? csvec[(blen-1)/XrdSys::PageSize] : XrdOucCRC::Calc32C(&p[blen-p2_off], p2_off, 0U);
+   if (p2_off < toread)
+   {
+      const uint32_t cl = XrdOucCRC::Calc32C(&b[p2_off], toread-p2_off, 0U);
+      crc32c = crc32c_combine(crc32c, cl, toread-p2_off);
+   }
+   lastpageval = crc32c;
    return 0;
 }
 
@@ -299,7 +298,7 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
 // OR where end of the file is not page aligned and this update starts after it
 // i.e. where checksums of last current page of file, or the first or last blocks after writing this buffer will need to be recomputed
 //
-int XrdOssCsiPages::StoreRangeUnaligned(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, const Sizes_t &sizes, const uint32_t *const csvec, uint64_t opts)
+int XrdOssCsiPages::StoreRangeUnaligned(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, const Sizes_t &sizes, const uint32_t *const csvec)
 {
    EPNAME("StoreRangeUnaligned");
    const off_t p1 = offset / XrdSys::PageSize;
@@ -325,7 +324,7 @@ int XrdOssCsiPages::StoreRangeUnaligned(XrdOssDF *const fd, const void *buff, co
    if ( p1_off>0 || blen < static_cast<size_t>(XrdSys::PageSize) )
    {
       const size_t bavail = (XrdSys::PageSize-p1_off > blen) ? blen : (XrdSys::PageSize-p1_off);
-      const int ret = StoreRangeUnaligned_preblock(fd, buff, bavail, offset, trackinglen, csvec, opts, prepageval);
+      const int ret = StoreRangeUnaligned_preblock(fd, buff, bavail, offset, trackinglen, csvec, prepageval);
       if (ret<0)
       {
          return ret;
@@ -374,7 +373,7 @@ int XrdOssCsiPages::StoreRangeUnaligned(XrdOssDF *const fd, const void *buff, co
    // last page contains existing data that has to be read to modify it
 
    uint32_t lastpageval;
-   const int ret = StoreRangeUnaligned_postblock(fd, &p[npoff], blen-npoff, offset+npoff, trackinglen, csp, opts, lastpageval);
+   const int ret = StoreRangeUnaligned_postblock(fd, &p[npoff], blen-npoff, offset+npoff, trackinglen, csp, lastpageval);
    if (ret<0)
    {
       return ret;
@@ -395,7 +394,7 @@ int XrdOssCsiPages::StoreRangeUnaligned(XrdOssDF *const fd, const void *buff, co
 // VerifyRangeUnaligned
 //
 // Used by Read when reading a range not starting at a page boundary within the file
-// OR when the length is not a multiple of the size and the read finishes before the end of file.
+// OR when the length is not a multiple of the page-size and the read finishes before the end of file.
 //
 ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {

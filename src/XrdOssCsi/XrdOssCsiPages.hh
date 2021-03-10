@@ -98,9 +98,9 @@ protected:
    ssize_t VerifyRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
    ssize_t FetchRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
    int StoreRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *);
-   int StoreRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &, const uint32_t *, uint64_t);
-   int StoreRangeUnaligned_preblock(XrdOssDF *, const void *, size_t, off_t, off_t, const uint32_t *, uint64_t, uint32_t &);
-   int StoreRangeUnaligned_postblock(XrdOssDF *, const void *, size_t, off_t, off_t, const uint32_t *, uint64_t, uint32_t &);
+   int StoreRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &, const uint32_t *);
+   int StoreRangeUnaligned_preblock(XrdOssDF *, const void *, size_t, off_t, off_t, const uint32_t *, uint32_t &);
+   int StoreRangeUnaligned_postblock(XrdOssDF *, const void *, size_t, off_t, off_t, const uint32_t *, uint32_t &);
 
 
    static ssize_t fullread(XrdOssDF *fd, void *buff, const off_t off , const size_t sz)

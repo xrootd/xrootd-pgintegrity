@@ -722,7 +722,7 @@ int XrdOssCsiPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t
        (offset+blen < static_cast<size_t>(trackinglen) && (blen % XrdSys::PageSize) != 0) ||
        ((trackinglen % XrdSys::PageSize) !=0 && offset > trackinglen))
    {
-      ret = StoreRangeUnaligned(fd,buff,offset,blen,sizes,csvec,opts);
+      ret = StoreRangeUnaligned(fd,buff,offset,blen,sizes,csvec);
    }
    else
    {
