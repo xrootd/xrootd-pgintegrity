@@ -43,9 +43,8 @@ static const uint8_t g_bz[XrdSys::PageSize] = {0};
 // this is a local utility function for now
 static uint32_t crc32c_combine(uint32_t crc1, uint32_t crc2, size_t len2)
 {
-   const uint32_t c1 = XrdOucCRC::Calc32C(g_bz, len2, 0U);
-   const uint32_t c2 = XrdOucCRC::Calc32C(g_bz, len2, crc1);
-   return c1^c2^crc2;
+   const uint32_t c1 = XrdOucCRC::Calc32C(g_bz, len2, ~crc1);
+   return ~c1^crc2;
 }
 
 //
