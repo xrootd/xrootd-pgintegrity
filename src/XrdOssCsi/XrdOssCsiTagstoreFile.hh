@@ -115,7 +115,7 @@ public:
          toread -= rret;
          nread += rret;
       }
-      if (nread != sz) return -EIO;
+      if (nread != sz) return -EDOM;
       return nread;
    }
 

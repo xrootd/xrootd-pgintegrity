@@ -106,7 +106,8 @@ protected:
    static ssize_t fullread(XrdOssDF *fd, void *buff, const off_t off , const size_t sz)
    {
       ssize_t rret = maxread(fd, buff, off, sz);
-      if (static_cast<size_t>(rret) != sz) return -EIO;
+      if (rret<0) return rret;
+      if (static_cast<size_t>(rret) != sz) return -EDOM;
       return rret;
    }
 

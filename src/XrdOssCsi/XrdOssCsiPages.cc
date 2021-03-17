@@ -74,7 +74,7 @@ int XrdOssCsiPages::Open(const char *path, off_t dsize, int flags, XrdOucEnv &en
          return 0;
       }
       TRACE(Warn, "Could not open tagfile for " << fn_ << " error " << ret);
-      return -EIO;
+      return -EDOM;
    }
    if (ret<0) return ret;
    if ((flags & O_ACCMODE) == O_RDONLY) rdonly_ = true;
@@ -235,7 +235,7 @@ ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const 
       // if offset is before the tracked len we should not be requested to verify zero bytes:
       // the file may have been truncated
       TRACE(Warn, "Verify request for zero bytes " << fn_ << ", file may be truncated");
-      return -EIO;
+      return -EDOM;
    }
 
    size_t rlen = blen;
@@ -647,7 +647,7 @@ ssize_t XrdOssCsiPages::FetchRange(
       // if offset if before the tracked len we should not be requested to verify zero bytes:
       // the file may have been truncated
       TRACE(Warn, "Verify request for zero bytes " << fn_ << ", file may be truncated");
-      return -EIO;
+      return -EDOM;
    }
 
    size_t rlen = blen;

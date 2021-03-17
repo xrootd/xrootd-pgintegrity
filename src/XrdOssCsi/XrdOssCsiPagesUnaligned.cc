@@ -74,7 +74,7 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
       if (fd == NULL)
       {
          TRACE(Warn, "Unexpected partially filled last page " << fn_);
-         return -EIO;
+         return -EDOM;
       }
       // assume tag for last page is correct; if not it can be discovered during a later read
       uint32_t prevtag;
@@ -201,7 +201,7 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
       if (rret<0)
       {
          TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
-         return -EIO;
+         return rret;
       }
       const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
       uint32_t crc32v;
@@ -262,7 +262,7 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
       if (rret<0)
       {
          TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
-         return -EIO;
+         return rret;
       }
       const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
       uint32_t crc32v;
@@ -437,7 +437,7 @@ ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *con
          size_t badoff;
          for(badoff=0;badoff<bcommon;badoff++) { if (((uint8_t*)buff)[badoff] != b[p1_off+badoff]) break; }
          TRACE(Warn, "Page-read mismatches buffer from " << fn_ << " starting at offset " << XrdSys::PageSize*p1+p1_off+badoff);
-         return -EIO;
+         return -EDOM;
       }
       const uint32_t crc32calc = XrdOucCRC::Calc32C(b, bavail, 0U);
       if (tbuf[0] != crc32calc)
@@ -512,7 +512,7 @@ ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *con
          size_t badoff;
          for(badoff=0;badoff<p2_off;badoff++) { if (p[blen-p2_off+badoff] != b[badoff]) break; }
          TRACE(Warn, "Page-read (3) mismatches buffer from " << fn_ << " starting at offset " << XrdSys::PageSize*p2+badoff);
-         return -EIO;
+         return -EDOM;
       }
       const uint32_t crc32calc = XrdOucCRC::Calc32C(b, bavail, 0U);
       size_t tidx = p2 - ntagsbase;

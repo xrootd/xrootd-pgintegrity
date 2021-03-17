@@ -114,7 +114,7 @@ int XrdOssCsiTagstoreFile::Open(const char *path, const off_t dsize, const int O
       if (fileIsBige_ != machineIsBige_) rv = bswap_32(rv);
       if (rv != cv)
       {
-         return -EIO;
+         return -EDOM;
       }
    }
 

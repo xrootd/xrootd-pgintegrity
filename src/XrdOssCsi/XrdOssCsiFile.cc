@@ -352,7 +352,7 @@ ssize_t XrdOssCsiFile::Read(void *buff, off_t offset, size_t blen)
    if (puret<0) return puret;
    if (puret != bread)
    {
-      return -EIO;
+      return -EDOM;
    }
    return bread;
 }
@@ -371,7 +371,7 @@ ssize_t XrdOssCsiFile::ReadRaw(void *buff, off_t offset, size_t blen)
    if (puret<0) return puret;
    if (puret != bread)
    {
-      return -EIO;
+      return -EDOM;
    }
    return bread;
 }
@@ -403,7 +403,7 @@ ssize_t XrdOssCsiFile::ReadV(XrdOucIOVec *readV, int n)
       if (puret<0) return puret;
       if (puret != readV[i].size)
       {
-         return -EIO;
+         return -EDOM;
       }
    }
    return rret;
@@ -507,7 +507,7 @@ ssize_t XrdOssCsiFile::pgRead(void *buffer, off_t offset, size_t rdlen, uint32_t
    if (puret<0) return puret;
    if (puret != bread)
    {
-      return -EIO;
+      return -EDOM;
    }
    return bread;
 }

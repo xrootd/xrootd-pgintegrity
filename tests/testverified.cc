@@ -277,7 +277,7 @@ TEST_F(osscsi_verifiedTest,nochecksumsnomissing) {
 
   // open existing datafile with missing tag.
   int iret = openfile(O_RDWR);
-  ASSERT_TRUE(iret == -EIO);
+  ASSERT_TRUE(iret == -EDOM);
 
   // try to create datafile: expect to fail best datafile does exist
   iret = openfile(O_RDWR|O_CREAT|O_EXCL);
@@ -286,7 +286,7 @@ TEST_F(osscsi_verifiedTest,nochecksumsnomissing) {
   // try to optionally create file: create isn't needed for the datafile
   // but the tag file is missing: however it should not be created
   iret = openfile(O_RDWR|O_CREAT);
-  ASSERT_TRUE(iret == -EIO);
+  ASSERT_TRUE(iret == -EDOM);
   struct stat sbuff;
   iret = stat(TMPFN ".xrdt",&sbuff);
   const int err = errno;
