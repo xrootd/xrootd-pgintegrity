@@ -2,7 +2,7 @@
 /*                                                                            */
 /*                    X r d O s s C s i P a g e s . c c                       */
 /*                                                                            */
-/* (C) Copyright 2020 CERN.                                                   */
+/* (C) Copyright 2021 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -157,7 +157,7 @@ void XrdOssCsiPages::TrackedSizeRelease()
    tscond_.Broadcast();
 }
 
-// Used by Write
+// Used by Write: At this point the user's data has not yet been written to the file.
 //
 int XrdOssCsiPages::UpdateRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssCsiRangeGuard &rg)
 {
@@ -205,7 +205,7 @@ int XrdOssCsiPages::UpdateRange(XrdOssDF *const fd, const void *buff, const off_
    return ret;
 }
 
-// Used by Read.
+// Used by Read: At this point the user's buffer has already been read from the file.
 //
 ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssCsiRangeGuard &rg)
 {
@@ -238,21 +238,14 @@ ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const 
       return -EDOM;
    }
 
-   size_t rlen = blen;
-   if (offset+blen > static_cast<size_t>(trackinglen))
-   {
-      rlen = trackinglen - offset;
-   }
-
    ssize_t vret;
-
-   if ((offset % XrdSys::PageSize) != 0 || (offset+rlen != static_cast<size_t>(trackinglen) && (rlen % XrdSys::PageSize) != 0))
+   if ((offset % XrdSys::PageSize) != 0 || (offset+blen != static_cast<size_t>(trackinglen) && (blen % XrdSys::PageSize) != 0))
    {
-      vret = VerifyRangeUnaligned(fd, buff, offset, rlen, sizes);
+      vret = VerifyRangeUnaligned(fd, buff, offset, blen, sizes);
    }
    else
    {
-      vret = VerifyRangeAligned(buff, offset, rlen, sizes);
+      vret = VerifyRangeAligned(buff, offset, blen, sizes);
    }
 
    return vret;
@@ -361,18 +354,11 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
 // FetchRangeAligned
 //
 // Used by pgRead or Read (via VerifyRangeAligned) when the read offset is at a page boundary within the file
-// AND the length is a multiple of page size or the read is up to the end of file.
+// AND the length is a multiple of page size or the read is up to exactly the end of file.
 //
 ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t & /* sizes */, uint32_t *const csvec, const uint64_t opts)
 {
    EPNAME("FetchRangeAligned");
-   if (csvec == NULL && !(opts & XrdOssDF::Verify))
-   {
-      // if the crc values are not wanted nor checks against data, then
-      // there's nothing more to do here
-      return blen;
-   }
-
    uint32_t rdvec[stsize_],vrbuf[stsize_];
 
    const off_t p1 = offset / XrdSys::PageSize;
@@ -608,10 +594,10 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
    return 0;
 }
 
-// used by pgRead
+// used by pgRead: At this point the user's buffer has already been read from the file
 //
 ssize_t XrdOssCsiPages::FetchRange(
-   XrdOssDF *const /* fd */, const void *buff, const off_t offset, const size_t blen,
+   XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen,
    uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
 {
    EPNAME("FetchRange");
@@ -620,16 +606,13 @@ ssize_t XrdOssCsiPages::FetchRange(
       return -EINVAL;
    }
 
-   // these methods require page aligned offset.
-   if ((offset & XrdSys::PageMask)) return -EINVAL;
-
    // if the tag file is missing there is nothing to fetch or verify
    // but if we should return a list of checksums calculate them from the data
    if (hasMissingTags_)
    {
       if (csvec)
       {
-         XrdOucCRC::Calc32C((void *)buff, blen, csvec);
+         pgDoCalc(buff, offset, blen, csvec);
       }
       return blen;
    }
@@ -650,19 +633,26 @@ ssize_t XrdOssCsiPages::FetchRange(
       return -EDOM;
    }
 
-   size_t rlen = blen;
-   if (offset+blen > static_cast<size_t>(trackinglen))
+   if (csvec == NULL && !(opts & XrdOssDF::Verify))
    {
-      rlen = trackinglen - offset;
+      // if the crc values are not wanted nor checks against data, then
+      // there's nothing more to do here
+      return blen;
    }
 
-   // rlen must be multiple of pagesize or short due to eof
-   if ((rlen % XrdSys::PageSize) != 0 && offset+rlen != static_cast<size_t>(trackinglen)) return -EINVAL;
-
-   return FetchRangeAligned(buff,offset,blen,sizes,csvec,opts);
+   ssize_t fret;
+   if ((offset % XrdSys::PageSize) != 0 || (offset+blen != static_cast<size_t>(trackinglen) && (blen % XrdSys::PageSize) != 0))
+   {
+     fret = FetchRangeUnaligned(fd, buff, offset, blen, sizes, csvec, opts);
+   }
+   else
+   {
+     fret = FetchRangeAligned(buff,offset,blen,sizes,csvec,opts);
+   }
+   return fret;
 }
 
-// Used by pgWrite
+// Used by pgWrite: At this point the user's data has not yet been written to the file.
 //
 int XrdOssCsiPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
 {
@@ -682,7 +672,7 @@ int XrdOssCsiPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t
    {
       if (csvec && (opts & XrdOssDF::doCalc))
       {
-         pgWriteDoCalc(buff, offset, blen, csvec);
+         pgDoCalc(buff, offset, blen, csvec);
       }
       return blen;
    }
@@ -701,7 +691,7 @@ int XrdOssCsiPages::StoreRange(XrdOssDF *const fd, const void *buff, const off_t
    // if doCalc is set and we have a csvec buffer fill it with calculated values
    if (csvec && (opts & XrdOssDF::doCalc))
    {
-      pgWriteDoCalc(buff, offset, blen, csvec);
+      pgDoCalc(buff, offset, blen, csvec);
    }
 
    // if no vector of crc have been given and not specifically requested to calculate,
@@ -750,7 +740,7 @@ int XrdOssCsiPages::VerificationStatus()
    return XrdOss::PF_csVun;
 }
 
-void XrdOssCsiPages::pgWriteDoCalc(const void *buffer, off_t offset, size_t wrlen, uint32_t *csvec)
+void XrdOssCsiPages::pgDoCalc(const void *buffer, off_t offset, size_t wrlen, uint32_t *csvec)
 {
    const size_t p_off = offset % XrdSys::PageSize;
    const size_t p_alen = (p_off > 0) ? (XrdSys::PageSize - p_off) : wrlen;

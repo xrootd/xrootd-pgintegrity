@@ -1,6 +1,8 @@
+#ifndef _XRDOSSCSICRCUTILS_H
+#define _XRDOSSCSICRCUTILS_H
 /******************************************************************************/
 /*                                                                            */
-/*                 X r d O s s C s i F i l e A i o . c c                      */
+/*                X r d O s s C s i C r c U t i l s . h h                     */
 /*                                                                            */
 /* (C) Copyright 2021 CERN.                                                   */
 /*                                                                            */
@@ -29,93 +31,94 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include "XrdOssCsiTrace.hh"
-#include "XrdOssCsi.hh"
-#include "XrdOssCsiPages.hh"
-#include "XrdOssCsiFileAio.hh"
 #include "XrdOuc/XrdOucCRC.hh"
+#include "XrdSys/XrdSysPageSize.hh"
+#include "assert.h"
 
-#include <string>
-#include <algorithm>
-#include <mutex>
+class XrdOssCsiCrcUtils {
+public:
 
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <limits.h>
-
-extern XrdOucTrace  OssCsiTrace;
-
-XrdOssCsiFileAioStore::~XrdOssCsiFileAioStore()
-{
-   XrdOssCsiFileAio *p;
-   while((p=list_))
+   // crc32c_combine
+   //
+   // crc1: crc32c value of data1
+   // crc2: crc32c value of data2
+   // len2: length of data2
+   //
+   // returns crc of concatenation of data1|data2
+   // note: using Calc32C: some optimisation could be made
+   static uint32_t crc32c_combine(uint32_t crc1, uint32_t crc2, size_t len2)
    {
-      list_ = list_->next_;
-      delete p;
+      if (len2==0)
+         return crc1;
+
+      assert(len2<=XrdSys::PageSize);
+
+      const uint32_t c1 = XrdOucCRC::Calc32C(g_bz, len2, ~crc1);
+      return ~c1^crc2;
    }
-}
 
-int XrdOssCsiFile::Read(XrdSfsAio *aiop)
-{
-   if (!pmi_) return -EBADF;
-
-   XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
-   nio->Init(aiop, this, false, 0, true);
-   pmi_->pages->LockTrackinglen(nio->rg_, (off_t)aiop->sfsAio.aio_offset,
-                                     (off_t)(aiop->sfsAio.aio_offset+aiop->sfsAio.aio_nbytes), true);
-   return successor_->Read(nio);
-}
-
-int XrdOssCsiFile::Write(XrdSfsAio *aiop)
-{
-   if (!pmi_) return -EBADF;
-   if (rdonly_) return -EBADF;
-
-   XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
-   nio->Init(aiop, this, false, 0, false);
-   // pages will be locked when write is scheduled
-   return nio->SchedWriteJob();
-}
-
-int XrdOssCsiFile::pgRead (XrdSfsAio *aioparm, uint64_t opts)
-{
-   if (!pmi_) return -EBADF;
-
-   XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
-   nio->Init(aioparm, this, true, opts, true);
-   pmi_->pages->LockTrackinglen(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
-                                     (off_t)(aioparm->sfsAio.aio_offset+aioparm->sfsAio.aio_nbytes), true);
-   return successor_->Read(nio);
-}
-
-int XrdOssCsiFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
-{
-   if (!pmi_) return -EBADF;
-   if (rdonly_) return -EBADF;
-   uint64_t pgopts = opts;
-
-   const int prec = XrdOssCsiPages::pgWritePrelockCheck(
-          (void *)aioparm->sfsAio.aio_buf,
-          (off_t)aioparm->sfsAio.aio_offset,
-          (size_t)aioparm->sfsAio.aio_nbytes,
-          aioparm->cksVec,
-          opts);
-   if (prec < 0)
+   // crc32c_split1
+   //
+   // crctot: crc32c of data1|data2
+   // crc2:   crc32c of data2
+   // len2:   length of data2
+   //
+   // returns crc of data1
+   // note: crc bitshift to right, significant optimisation likely
+   //       possible with intrinsics or a precomputed table
+   static uint32_t crc32c_split1(uint32_t crctot, uint32_t crc2, size_t len2)
    {
-      return prec;
-   }
-          
-   XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
-   nio->Init(aioparm, this, true, pgopts, false);
-   // pages will be locked when write is scheduled
-   return nio->SchedWriteJob();
-}
+      if (len2==0)
+         return crctot;
 
-int XrdOssCsiFile::Fsync(XrdSfsAio *aiop)
-{
-   aioWait();
-   aiop->Result = this->Fsync();
-   aiop->doneWrite();
-   return 0;
-}
+      assert(len2<=XrdSys::PageSize);
+      uint32_t crc = (crctot ^ crc2);
+      for(size_t i=0;i<8*len2;i++) {
+         crc = (crc<<1)^((crc&0x80000000) ? (CrcPoly << 1 | 0x1) : 0);
+      }
+      return crc;
+   }
+
+   // crc32c_split2
+   //
+   // crctot: crc32c of data1|data2
+   // crc1:   crc32c of data1
+   // len2:   length of data2
+   //
+   // returns crc of data2
+   // note: using Calc32C: some optimisation could be made
+   static uint32_t crc32c_split2(uint32_t crctot, uint32_t crc1, size_t len2)
+   {
+      if (len2==0)
+         return 0;
+
+      assert(len2<=XrdSys::PageSize);
+      uint32_t c1 = XrdOucCRC::Calc32C(g_bz, len2, ~crc1);
+      return ~c1^crctot;
+   }
+
+   // crc32c_extendwith_zero
+   //
+   // crc: crc32c of data
+   // len: number of zero bytes to append
+   //
+   // returns crc of data|[0x00 x len]
+   // note: using Calc32C: some optimisation could be made
+   static uint32_t crc32c_extendwith_zero(uint32_t crc, size_t len)
+   {
+      if (len==0)
+         return crc;
+
+      assert(len<=XrdSys::PageSize);
+      return XrdOucCRC::Calc32C(g_bz, len, crc);
+   }
+
+private:
+
+   static const uint8_t g_bz[XrdSys::PageSize];
+
+   // CRC-32C (iSCSI) polynomial in reversed bit order.
+   static const uint32_t CrcPoly = 0x82F63B78;
+};
+
+#endif

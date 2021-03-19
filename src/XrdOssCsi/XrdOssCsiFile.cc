@@ -2,7 +2,7 @@
 /*                                                                            */
 /*                    X r d O s s C s i F i l e . c c                         */
 /*                                                                            */
-/* (C) Copyright 2020 CERN.                                                   */
+/* (C) Copyright 2021 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -484,24 +484,11 @@ ssize_t XrdOssCsiFile::pgRead(void *buffer, off_t offset, size_t rdlen, uint32_t
 {
    if (!pmi_) return -EBADF;
 
-   // this is a tighter restriction that FetchRange requires
-   if ((rdlen % XrdSys::PageSize) != 0) return -EINVAL;
-
    XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, offset, offset+rdlen, true);
 
-   ssize_t toread = rdlen;
-   ssize_t bread = 0;
-   uint8_t *const p = (uint8_t*)buffer;
-   do
-   {
-      ssize_t rret = successor_->Read(&p[bread], offset+bread, toread);
-      if (rret<0) return rret;
-      if (rret==0) break;
-      toread -= rret;
-      bread += rret;
-   } while(toread>0 && (bread % XrdSys::PageSize)!=0);
-   if (rdlen == 0) return bread;
+   const ssize_t bread = successor_->Read(buffer, offset, rdlen);
+   if (bread<0 || rdlen==0) return bread;
 
    ssize_t puret = Pages()->FetchRange(successor_, buffer, offset, bread, csvec, opts, rg);
    if (puret<0) return puret;

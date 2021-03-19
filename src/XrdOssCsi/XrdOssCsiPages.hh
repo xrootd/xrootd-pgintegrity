@@ -4,7 +4,7 @@
 /*                                                                            */
 /*                    X r d O s s C s i P a g e s . h h                       */
 /*                                                                            */
-/* (C) Copyright 2020 CERN.                                                   */
+/* (C) Copyright 2021 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -66,7 +66,7 @@ public:
    void TrackedSizeRelease();
    int VerificationStatus();
 
-   static void pgWriteDoCalc(const void *, off_t, size_t, uint32_t *);
+   static void pgDoCalc(const void *, off_t, size_t, uint32_t *);
    static int pgWritePrelockCheck(const void *, off_t, size_t, const uint32_t *, uint64_t);
 
 protected:
@@ -97,6 +97,9 @@ protected:
    ssize_t VerifyRangeAligned(const void *, off_t, size_t, const Sizes_t &);
    ssize_t VerifyRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
    ssize_t FetchRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
+   ssize_t FetchRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
+   int FetchRangeUnaligned_preblock(XrdOssDF *, const void *, off_t, size_t, off_t, uint32_t *, uint32_t *, uint64_t);
+   int FetchRangeUnaligned_postblock(XrdOssDF *, const void *, off_t, size_t, off_t, uint32_t *, uint32_t *, size_t, uint64_t);
    int StoreRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *);
    int StoreRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &, const uint32_t *);
    int StoreRangeUnaligned_preblock(XrdOssDF *, const void *, size_t, off_t, off_t, const uint32_t *, uint32_t &);

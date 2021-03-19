@@ -4,7 +4,7 @@
 /*                                                                            */
 /*                 X r d O s s C s i F i l e A i o . h h                      */
 /*                                                                            */
-/* (C) Copyright 2020 CERN.                                                   */
+/* (C) Copyright 2021 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -89,41 +89,8 @@ public:
          Recycle();
          return;
       }
-      //
-      // if this is a pg operation, and this may have been a short read,
-      // try to complete to a page boundary
-      //
-      ssize_t toread = this->sfsAio.aio_nbytes - this->Result;
-      ssize_t nread = this->Result;
-      ssize_t premain = XrdSys::PageSize - (nread % XrdSys::PageSize);
-      if (premain == XrdSys::PageSize) premain = 0;
 
-      if (isPgOp_)
-      {
-         // read enough to complete the next page
-         toread = std::min(toread, premain);
-      }
-      else
-      {
-         // not a pg operation, no need to read more
-         toread = 0;
-      }
-      char *p = (char*)this->sfsAio.aio_buf;
-      while(toread>0)
-      {
-         const ssize_t rret = file_->successor_->Read(&p[nread], this->sfsAio.aio_offset+nread, toread);
-         if (rret == 0) break;
-         if (rret<0)
-         {
-            parentaio_->Result = rret;
-            parentaio_->doneRead();
-            Recycle();
-            return;
-         }
-         toread -= rret;
-         nread += rret;
-      }
-      parentaio_->Result = nread;
+      // schedule the fetchrange
       SchedReadJob();
    }
 

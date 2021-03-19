@@ -24,6 +24,7 @@ add_library(
   XrdOssCsi/XrdOssCsiTagstoreFile.cc          XrdOssCsi/XrdOssCsiTagstoreFile.hh
   XrdOssCsi/XrdOssCsiRanges.cc                XrdOssCsi/XrdOssCsiRanges.hh
   XrdOssCsi/XrdOssCsiConfig.cc                XrdOssCsi/XrdOssCsiConfig.hh
+  XrdOssCsi/XrdOssCsiCrcUtils.cc              XrdOssCsi/XrdOssCsiCrcUtils.hh
                                               XrdOssCsi/XrdOssCsiTagstore.hh
                                               XrdOssCsi/XrdOssHandler.hh
                                               XrdOssCsi/XrdOssCsiTrace.hh

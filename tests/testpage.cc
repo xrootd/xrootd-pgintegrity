@@ -28,6 +28,7 @@
 /******************************************************************************/
 
 #include "XrdOss/XrdOss.hh"
+#include "XrdOuc/XrdOucCRC.hh"
 #include "XrdOss/XrdOssDefaultSS.hh"
 #include "XrdOuc/XrdOucEnv.hh"
 #include "XrdSys/XrdSysLogger.hh"
@@ -356,7 +357,11 @@ TEST_F(osscsi_pageTest,badcrc) {
   ASSERT_TRUE(csvec2[3] == 0x4);
   ret = m_file->Write(m_b,0,100);
   ASSERT_TRUE(ret == -EDOM);
+  ret = m_file->Read(rbuf, 0, 100);
+  ASSERT_TRUE(ret == -EDOM);
   ret = m_file->Write(&m_b[4096],4096,100);
+  ASSERT_TRUE(ret == 100);
+  ret = m_file->Read(rbuf, 4096, 100);
   ASSERT_TRUE(ret == 100);
   ret = m_file->Write(&m_b[8192],8192,8192);
   ASSERT_TRUE(ret == 8192);
@@ -465,6 +470,76 @@ TEST_F(osscsi_pageTest,pgwritenonaligned2) {
   ret = m_file->pgRead(rbuf, 0, 16384, csvec, XrdOssDF::Verify);
   ASSERT_TRUE(ret == 10200);
   ASSERT_TRUE(memcmp(&rbuf[2100], m_b, 8100)==0);
+}
+
+TEST_F(osscsi_pageTest,overwritebadcrc) {
+  uint8_t testb[] = "abcdefghij";
+  uint8_t testb2[] = "abcZefghij";
+  uint8_t rbuf[10];
+  uint32_t crc = XrdOucCRC::Calc32C(testb,10,0u);
+  ssize_t ret = m_file->pgWrite(testb2, 0, 10, &crc, 0);
+  ASSERT_TRUE(ret == 10);
+  ret = m_file->Write(&testb[3], 3, 1);
+  ASSERT_TRUE(ret == -EDOM);
+  ret = m_file->pgWrite(testb, 0, 9, NULL, 0);
+  ASSERT_TRUE(ret == -EDOM);
+  ret = m_file->pgWrite(testb, 0, 10, &crc, XrdOssDF::Verify);
+  ASSERT_TRUE(ret == 10);
+}
+
+TEST_F(osscsi_pageTest,readpartgoodcrc) {
+  uint8_t testb[] = "abcdeabcd";
+  uint8_t rbuf[9];
+  uint32_t crc = XrdOucCRC::Calc32C(testb,9,0u);
+  ssize_t ret = m_file->pgWrite(testb, 0, 9, &crc, 0);
+  ASSERT_TRUE(ret == 9);
+  uint32_t csvec[1];
+
+  ret = m_file->pgRead(rbuf, 0, 4, csvec, 0);
+  ASSERT_TRUE(ret == 4);
+  ASSERT_TRUE(csvec[0] == XrdOucCRC::Calc32C(rbuf, 4, 0u));
+  ASSERT_TRUE(!memcmp(rbuf, testb, 4));
+
+  ret = m_file->pgRead(rbuf, 4, 1, csvec, 0);
+  ASSERT_TRUE(ret == 1);
+  ASSERT_TRUE(csvec[0] == XrdOucCRC::Calc32C(rbuf, 1, 0u));
+  ASSERT_TRUE(!memcmp(rbuf, &testb[4], 1));
+  ASSERT_TRUE(m_file->pgRead(rbuf, 4, 1, csvec, XrdOssDF::Verify) == 1);
+  ASSERT_TRUE(csvec[0] == XrdOucCRC::Calc32C(rbuf, 1, 0u));
+  ASSERT_TRUE(!memcmp(rbuf, &testb[4], 1));
+
+  ret = m_file->pgRead(rbuf, 5, 4, csvec, 0);
+  ASSERT_TRUE(ret == 4);
+  ASSERT_TRUE(csvec[0] == XrdOucCRC::Calc32C(rbuf, 4, 0u));
+  ASSERT_TRUE(!memcmp(rbuf, &testb[5], 4));
+}
+
+TEST_F(osscsi_pageTest,readpartbadcrc) {
+  uint8_t testb[] = "abcdeabcd";
+  uint8_t testb2[] = "abcZeabcZ";
+  uint8_t rbuf[9];
+  uint32_t crc = XrdOucCRC::Calc32C(testb,9,0u);
+  ssize_t ret = m_file->pgWrite(testb2, 0, 9, &crc, 0);
+  ASSERT_TRUE(ret == 9);
+  uint32_t csvec[1];
+
+  ret = m_file->pgRead(rbuf, 0, 4, csvec, 0);
+  ASSERT_TRUE(ret == 4);
+  ASSERT_TRUE(csvec[0] != XrdOucCRC::Calc32C(rbuf, 4, 0u));
+  ASSERT_TRUE(!memcmp(rbuf, testb2, 4));
+  ASSERT_TRUE(m_file->pgRead(rbuf, 0, 4, csvec, XrdOssDF::Verify) == -EDOM);
+
+  ret = m_file->pgRead(rbuf, 4, 1, csvec, 0);
+  ASSERT_TRUE(ret == 1);
+  ASSERT_TRUE(csvec[0] != XrdOucCRC::Calc32C(rbuf, 1, 0u));
+  ASSERT_TRUE(!memcmp(rbuf, &testb2[4], 1));
+  ASSERT_TRUE(m_file->pgRead(rbuf, 4, 1, csvec, XrdOssDF::Verify) == -EDOM);
+
+  ret = m_file->pgRead(rbuf, 5, 4, csvec, 0);
+  ASSERT_TRUE(ret == 4);
+  ASSERT_TRUE(csvec[0] != XrdOucCRC::Calc32C(rbuf, 4, 0u));
+  ASSERT_TRUE(!memcmp(rbuf, &testb2[5], 4));
+  ASSERT_TRUE(m_file->pgRead(rbuf, 5, 4, csvec, XrdOssDF::Verify) == -EDOM);
 }
 
 } // namespace integrationTests

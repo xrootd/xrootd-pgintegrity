@@ -80,13 +80,25 @@ public:
               XrdOucCRC::Calc32C((void*)&m_b[bufidx+p_alen], len-p_alen, &crcv[1]);
             }
             XrdOucCRC::Calc32C((void*)&m_b[bufidx], std::min(p_alen, len), crcv);
-            res = file->pgWrite(&m_b[bufidx],off,len,crcv,0);
+            res = file->pgWrite(&m_b[bufidx],off,len,(rand()%2) ? crcv : NULL,(rand()%2) ? XrdOssDF::Verify : 0);
           }
           break;
         case 1:
-          off &= 0xfffff000;
-          len &= 0xfffff000;
-          res = file->pgRead(&buf[0],off,len,NULL,XrdOssDF::Verify);
+          {
+            uint32_t crcv[(len+4095)/4096 + 1],*crcp;
+            res = file->pgRead(&buf[0],off,len,crcp=((rand()%2) ? crcv : NULL), (rand()%2) ? XrdOssDF::Verify : 0);
+            if (crcp) {
+              uint32_t crccal[(len+4095)/4096 + 1];
+              const size_t p_off = off % 4096;
+              const size_t p_alen = (p_off > 0) ? (4096 - p_off) : len;
+              const size_t ncrc = (p_alen<len) ? ((len-p_alen+4095)/4096) : ((std::min(p_alen, len)+4095)/4096);
+              if (p_alen < len) {
+                XrdOucCRC::Calc32C((void*)&buf[p_alen], len-p_alen, &crccal[1]);
+              }
+              XrdOucCRC::Calc32C((void*)&buf[0], std::min(p_alen, len), crccal);
+              if (memcmp(crccal, crcp, 4*ncrc)) ret = -EDOM;
+            }
+          }
           break;
         case 2:
           res = file->Read(&buf[0],off,len);
@@ -176,7 +188,7 @@ protected:
   XrdOucEnv m_env;
   XrdOss *m_oss;
   XrdOssDF *m_file;
-  uint8_t m_b[4096*256];
+  uint8_t m_b[4096*256 + 2000];
   bool m_fileopen;
   const static int NTHR = 16;
 };
