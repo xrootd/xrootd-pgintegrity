@@ -90,6 +90,35 @@ public:
          return;
       }
 
+      //
+      // if this is a pg operation and this was a short read, try to complete,
+      // otherwise client will have to deal with joining csvec values from repeated reads
+      //
+      ssize_t toread = this->sfsAio.aio_nbytes - this->Result;
+      ssize_t nread = this->Result;
+
+      if (!isPgOp_)
+      {
+         // not a pg operation, no need to read more
+         toread = 0;
+      }
+      char *p = (char*)this->sfsAio.aio_buf;
+      while(toread>0)
+      {
+         const ssize_t rret = file_->successor_->Read(&p[nread], this->sfsAio.aio_offset+nread, toread);
+         if (rret == 0) break;
+         if (rret<0)
+         {
+            parentaio_->Result = rret;
+            parentaio_->doneRead();
+            Recycle();
+            return;
+         }
+         toread -= rret;
+         nread += rret;
+      }
+      parentaio_->Result = nread;
+
       // schedule the fetchrange
       SchedReadJob();
    }
