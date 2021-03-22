@@ -487,7 +487,7 @@ ssize_t XrdOssCsiFile::pgRead(void *buffer, off_t offset, size_t rdlen, uint32_t
    XrdOssCsiRangeGuard rg;
    Pages()->LockTrackinglen(rg, offset, offset+rdlen, true);
 
-   // if we return a short amount of data the client will have to deal with
+   // if we return a short amount of data the caller will have to deal with
    // joining csvec values from repeated reads: for simplicity try to read as
    // such as possible up to the request read length
    ssize_t toread = rdlen;

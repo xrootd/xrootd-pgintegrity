@@ -341,7 +341,7 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
       const ssize_t wret = ts_->WriteTags(useinternal ? calcbuf : &csvec[nblkwritten], sp+nblkwritten, blkwcnt);
       if (wret<0)
       {
-         TRACE(Warn, "Error writing tags for " << fn_ << " pages " << (sp+nblkwritten) << " to " << (sp+nblkwritten+blkwcnt-1) << " error=" << wret);
+         TRACE(Warn, TagsWriteError(sp+nblkwritten, blkwcnt, wret));
          return wret;
       }
       blktowrite -= blkwcnt;
@@ -394,7 +394,11 @@ ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t of
    {
       const size_t rcnt = std::min(toread, rdbufsz-(nread%rdbufsz));
       const ssize_t rret = ts_->ReadTags(&rdbuf[nread%rdbufsz], p1+nread, rcnt);
-      if (rret<0) return rret;
+      if (rret<0)
+      {
+         TRACE(Warn, TagsReadError(p1+nread, rcnt, rret));
+         return rret;
+      }
       if ((opts & XrdOssDF::Verify))
       {
          size_t toverif = rcnt;
@@ -408,7 +412,10 @@ ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t of
             {
                size_t badpg;
                for(badpg=0;badpg<vcnt;++badpg) { if (memcmp(&vrbuf[badpg],&rdbuf[(nread+nverif+badpg)%rdbufsz],4)) break; }
-               TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*(p1+nread+nverif+badpg));
+               TRACE(Warn, CRCMismatchError( (nread+nverif+badpg<nfull) ? XrdSys::PageSize : p2_off,
+                                             XrdSys::PageSize*(p1+nread+nverif+badpg),
+                                             vrbuf[badpg], 
+                                             rdbuf[(nread+nverif+badpg)%rdbufsz] ));
                return -EDOM;
             }
             toverif -= vcnt;
@@ -559,7 +566,7 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
          ssize_t rret = XrdOssCsiPages::fullread(fd, b, p_until*XrdSys::PageSize, toread);
          if (rret<0)
          {
-            TRACE(Warn, "Error reading data from " << fn_ << " offset " << (p_until*XrdSys::PageSize) << " length " << toread << " error=" << rret);
+            TRACE(Warn, PageReadError(toread, p_until*XrdSys::PageSize, rret));
             return rret;
          }
          const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
@@ -567,12 +574,12 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
          rret = ts_->ReadTags(&crc32v, p_until, 1);
          if (rret<0)
          {
-            TRACE(Warn, "Error reading tag for " << fn_ << " page " << p_until << " error=" << rret);
+            TRACE(Warn, TagsReadError(p_until, 1, rret));
             return rret;
          }
          if (crc32v != crc32c)
          {
-            TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p_until);
+            TRACE(Warn, CRCMismatchError(toread, XrdSys::PageSize*p_until, crc32c, crc32v));
             return -EDOM;
          }
       }
@@ -584,7 +591,7 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
       const ssize_t wret = ts_->WriteTags(&crc32c, p_until, 1);
       if (wret < 0)
       {
-         TRACE(Warn, "Error writing tag for " << fn_ << " page " << p_until << " error=" << wret);
+         TRACE(Warn, TagsWriteError(p_until, 1, wret));
          return wret;
       }
    }

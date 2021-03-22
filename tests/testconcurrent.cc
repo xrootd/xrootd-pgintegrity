@@ -91,7 +91,7 @@ public:
               uint32_t crccal[(len+4095)/4096 + 1];
               const size_t p_off = off % 4096;
               const size_t p_alen = (p_off > 0) ? (4096 - p_off) : len;
-              const size_t ncrc = (p_alen<len) ? ((len-p_alen+4095)/4096) : ((std::min(p_alen, len)+4095)/4096);
+              const size_t ncrc = (p_alen<len) ? ((len-p_alen+4095)/4096)+1 : ((std::min(p_alen, len)+4095)/4096);
               if (p_alen < len) {
                 XrdOucCRC::Calc32C((void*)&buf[p_alen], len-p_alen, &crccal[1]);
               }

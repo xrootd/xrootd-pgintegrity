@@ -75,14 +75,14 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
       const ssize_t rret = ts_->ReadTags(&prevtag, tracked_page, 1);
       if (rret < 0)
       {
-         TRACE(Warn, "Error reading tag for " << fn_ << " page " << tracked_page << " error=" << rret);
+         TRACE(Warn, TagsReadError(tracked_page, 1, rret));
          return rret;
       }
       const uint32_t crc32c = CrcUtils.crc32c_extendwith_zero(prevtag, XrdSys::PageSize - tracked_off);
       const ssize_t wret = ts_->WriteTags(&crc32c, tracked_page, 1);
       if (wret < 0)
       {
-         TRACE(Warn, "Error writing tag for " << fn_ << " page " << tracked_page << " error=" << wret);
+         TRACE(Warn, TagsWriteError(tracked_page, 1, wret, " (prev)"));
          return wret;
       }
    }
@@ -100,7 +100,7 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
       const ssize_t wret = ts_->WriteTags(&crc32Vec[0], firstEmpty+nwritten, nw);
       if (wret<0)
       {
-         TRACE(Warn, "Error writing tag for " << fn_ << " (empty page) pages " << (firstEmpty+nwritten) << " to " << (firstEmpty+nwritten+nw-1) << " error=" << wret);
+         TRACE(Warn, TagsWriteError(firstEmpty+nwritten, nw, wret, " (new)"));
          return wret;
       }
       towrite -= wret;
@@ -160,7 +160,7 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
          const ssize_t rret = ts_->ReadTags(&crc32v, p1, 1);
          if (rret<0)
          {
-            TRACE(Warn, "Error reading tag (append) for " << fn_ << " page " << p1 << " error=" << rret);
+            TRACE(Warn, TagsReadError(p1, 1, rret, " (append)"));
             return rret;
          }
       }
@@ -192,7 +192,7 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
    ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, bavail);
    if (rret<0)
    {
-      TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
+      TRACE(Warn, PageReadError(bavail, XrdSys::PageSize * p1, rret));
       return rret;
    }
    uint32_t crc32c = XrdOucCRC::Calc32C(b, bavail, 0U);
@@ -200,14 +200,14 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
    rret = ts_->ReadTags(&crc32v, p1, 1);
    if (rret<0)
    {
-      TRACE(Warn, "Error reading tag for " << fn_ << " page " << p1 << " error=" << rret);
+      TRACE(Warn, TagsReadError(p1, 1, rret, " (overwrite)"));
       return rret;
    }
    // this may be an implicit verification (e.g. pgWrite may return EDOM without Verify requested)
    // however, it's not clear if there is a meaningful way to crc a mismatching page during a partial update
    if (crc32v != crc32c)
    {
-      TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p1);
+      TRACE(Warn, CRCMismatchError(bavail, XrdSys::PageSize*p1, crc32c, crc32v));
       return -EDOM;
    }
 
@@ -263,7 +263,7 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
       ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p2, bavail);
       if (rret<0)
       {
-         TRACE(Warn, "Error reading data from " << fn_ << " result " << rret);
+         TRACE(Warn, PageReadError(bavail, XrdSys::PageSize * p2, rret));
          return rret;
       }
       const uint32_t crc32c = XrdOucCRC::Calc32C(b, bavail, 0U);
@@ -271,14 +271,14 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
       rret = ts_->ReadTags(&crc32v, p2, 1);
       if (rret<0)
       {
-         TRACE(Warn, "Error reading tag for " << fn_ << " page " << p2 << " error=" << rret);
+         TRACE(Warn, TagsReadError(p2, 1, rret));
          return rret;
       }
       // this may be an implicit verification (e.g. pgWrite may return EDOM without Verify requested)
       // however, it's not clear if there is a meaningful way to crc a mismatching page during a partial update
       if (crc32v != crc32c)
       {
-         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p2);
+         TRACE(Warn, CRCMismatchError(bavail, XrdSys::PageSize*p2, crc32c, crc32v));
          return -EDOM;
       }
    }
@@ -356,7 +356,7 @@ int XrdOssCsiPages::StoreRangeUnaligned(XrdOssDF *const fd, const void *buff, co
          const ssize_t wret = ts_->WriteTags(&prepageval, p1, 1);
          if (wret<0)
          {
-            TRACE(Warn, "Error writing tag for " << fn_ << " page " << p1 << " error=" << wret);
+            TRACE(Warn, TagsWriteError(p1, 1, wret));
             return wret;
          }
       }
@@ -435,7 +435,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void 
       const ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p1, bavail);
       if (rret<0)
       {
-         TRACE(Warn, "Error reading data from " << fn_ << " offset " << (p1*XrdSys::PageSize) << " length " << bavail << " error=" << rret);
+         TRACE(Warn, PageReadError(bavail, XrdSys::PageSize*p1, rret));
          return rret;
       }
       // if we're going to verify, make sure we just read the same overlapping data as that in the user's buffer
@@ -445,7 +445,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void 
          {
             size_t badoff;
             for(badoff=0;badoff<bcommon;badoff++) { if (((uint8_t*)buff)[badoff] != b[p1_off+badoff]) break; }
-            TRACE(Warn, "Page-read mismatches buffer from " << fn_ << " starting at offset " << XrdSys::PageSize*p1+p1_off+badoff);
+            TRACE(Warn, ByteMismatchError(bavail, XrdSys::PageSize*p1+p1_off+badoff, ((uint8_t*)buff)[badoff], b[p1_off+badoff]));
             return -EDOM;
          }
       }
@@ -457,7 +457,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void 
       const uint32_t crc32calc = XrdOucCRC::Calc32C(ub, bavail, 0U);
       if (tbuf[0] != crc32calc)
       {
-         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p1);
+         TRACE(Warn, CRCMismatchError(bavail, XrdSys::PageSize*p1, crc32calc, tbuf[0]));
          return -EDOM;
       }
    }
@@ -467,11 +467,12 @@ int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void 
    if (bavail>bcommon && csvec)
    {
      // make sure csvec[0] corresponds to only the data the user wanted, not whole page.
-     // if we have already verified the user's data, just take its checksum. Can only
-     // base crc on returned data if it's verified, otherwise we lose track of corruption.
+     // if we have already verified the page + common part matches user's, take checksum of common.
+     // (Use local copy of page, perhaps less chance of accidental concurrent modification than buffer)
+     // Otherwise base on saved checksum.
      if ((opts & XrdOssDF::Verify))
      {
-        csvec[0] = XrdOucCRC::Calc32C(buff, bcommon, 0u);
+        csvec[0] = XrdOucCRC::Calc32C(&b[p1_off], bcommon, 0u);
      }
      else
      {
@@ -515,7 +516,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void
       const ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p2, bavail);
       if (rret<0)
       {
-         TRACE(Warn, "Error reading data from " << fn_ << " offset " << (p2*XrdSys::PageSize) << " length " << bavail << " error=" << rret);
+         TRACE(Warn, PageReadError(bavail, XrdSys::PageSize*p2, rret));
          return rret;
       }
       // if we're verifying make sure overlapping part of data just read matches user's buffer
@@ -526,7 +527,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void
          {
             size_t badoff;
             for(badoff=0;badoff<p2_off;badoff++) { if (p[blen-p2_off+badoff] != b[badoff]) break; }
-            TRACE(Warn, "Page-read mismatches buffer from " << fn_ << " starting at offset " << XrdSys::PageSize*p2+badoff);
+            TRACE(Warn, ByteMismatchError(bavail, XrdSys::PageSize*p2+badoff, p[blen-p2_off+badoff], b[badoff]));
             return -EDOM;
          }
       }
@@ -537,7 +538,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void
       const uint32_t crc32calc = XrdOucCRC::Calc32C(ub, bavail, 0U);
       if (tbuf[tidx] != crc32calc)
       {
-         TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*p2);
+         TRACE(Warn, CRCMismatchError(bavail, XrdSys::PageSize*p2, crc32calc, tbuf[tidx]));
          return -EDOM;
       }
    }
@@ -547,7 +548,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void
    {
       if ((opts & XrdOssDF::Verify))
       {
-         // verified; calculate crc based on user's buffer.
+         // verified; calculate crc based on common part of page.
          csvec[tidx] = XrdOucCRC::Calc32C(b, p2_off, 0u);
       }
       else
@@ -600,7 +601,7 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
    ssize_t rret = ts_->ReadTags(tbuf, ntagsbase, tcnt);
    if (rret<0)
    {
-      TRACE(Warn, "Error reading tags for " << fn_ << " pages " << ntagsbase << " to " << (ntagsbase+tcnt-1) << " error=" << rret);
+      TRACE(Warn, TagsReadError(ntagsbase, tcnt, rret, " (first)"));
       return rret;
    }
    ntagstoread -= tcnt;
@@ -645,7 +646,7 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
                rret = ts_->ReadTags(tbuf, ntagsbase, tcnt);
                if (rret<0)
                {
-                  TRACE(Warn, "Error reading tags (2) for " << fn_ << " pages " << ntagsbase << " to " << (ntagsbase+tcnt-1) << " error=" << rret);
+                  TRACE(Warn, TagsReadError(ntagsbase, tcnt, rret, " (mid)"));
                   return rret;
                }
                ntagstoread -= tcnt;
@@ -655,7 +656,9 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
             {
                size_t badpg;
                for(badpg=0;badpg<nv;badpg++) { if (memcmp(&calcbuf[nvalid+badpg], &tbuf[tidx+badpg],4)) break; }
-               TRACE(Warn, "CRC error " << fn_ << " in page starting at offset " << XrdSys::PageSize*(ntagsbase+tidx+badpg));
+               TRACE(Warn, CRCMismatchError(XrdSys::PageSize,
+                                            XrdSys::PageSize*(ntagsbase+tidx+badpg),
+                                            calcbuf[nvalid+badpg], tbuf[tidx+badpg]));
                return -EDOM;
             }
             tovalid -= nv;
@@ -680,7 +683,7 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
          rret = ts_->ReadTags(tbuf, ntagsbase, 1);
          if (rret<0)
          {
-            TRACE(Warn, "Error reading tag for " << fn_ << " page " << ntagsbase << " error=" << rret);
+            TRACE(Warn, TagsReadError(ntagsbase, 1, rret, " (last)"));
             return rret;
          }
          ntagstoread = 0;

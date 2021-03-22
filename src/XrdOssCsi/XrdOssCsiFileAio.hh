@@ -92,7 +92,7 @@ public:
 
       //
       // if this is a pg operation and this was a short read, try to complete,
-      // otherwise client will have to deal with joining csvec values from repeated reads
+      // otherwise caller will have to deal with joining csvec values from repeated reads
       //
       ssize_t toread = this->sfsAio.aio_nbytes - this->Result;
       ssize_t nread = this->Result;

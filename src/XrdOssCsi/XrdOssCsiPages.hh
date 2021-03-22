@@ -38,6 +38,8 @@
 #include <memory>
 #include <mutex>
 #include <utility>
+#include <inttypes.h>
+#include <stdio.h>
 
 class XrdOssCsiPages
 {
@@ -83,6 +85,8 @@ protected:
    XrdSysCondVar tscond_;
    bool tsforupdate_;
 
+   // fn_ is the associated data filename when the page object is made.
+   // if renamed while the page object exists fn_ is not updated
    const std::string fn_;
    const std::string tident_;
    const char *tident;
@@ -127,6 +131,62 @@ protected:
          nread += rret;
       }
       return nread;
+   }
+
+   std::string CRCMismatchError(size_t blen, off_t off, uint32_t got, uint32_t expected)
+   {
+      char buf[256],buf2[256];
+      snprintf(buf, sizeof(buf),
+               "bad crc32c/0x%04" PRIx32 " checksum in file ",
+               (uint32_t)blen);
+      snprintf(buf2, sizeof(buf2),
+               " at offset 0x%" PRIx64 ", got 0x%08" PRIx32 ", expected 0x%08" PRIx32,
+               (uint64_t)off,
+               got, expected);
+      return buf + fn_ + buf2;
+   }
+
+   std::string ByteMismatchError(size_t blen, off_t off, uint8_t user, uint8_t page)
+   {
+      char buf[256],buf2[256];
+      snprintf(buf, sizeof(buf),
+               "unexpected byte mismatch between user-buffer and page/0x%04" PRIx32 " in file ",
+               (uint32_t)blen);
+      snprintf(buf2, sizeof(buf2),
+               " at offset 0x%" PRIx64 ", user-byte 0x%02x, page-byte 0x%02x",
+               (uint64_t)off,
+               user, page);
+      return buf + fn_ + buf2;
+   }
+
+   std::string PageReadError(size_t blen, off_t off, int ret)
+   {
+      char buf[256],buf2[256];
+      snprintf(buf, sizeof(buf),
+               "error %d while reading page/0x%04" PRIx32 " in file ",
+               ret, (uint32_t)blen);
+      snprintf(buf2, sizeof(buf2),
+               " at offset 0x%" PRIx64,
+               (uint64_t)off);
+      return buf + fn_ + buf2;
+   }
+
+   std::string TagsReadError(off_t start, size_t n, int ret, const char *suffix = 0)
+   {
+      char buf[256];
+      snprintf(buf, sizeof(buf),
+               "error %d while reading crc32c values for pages [0x%" PRIx64":0x%" PRIx64 "] for file ",
+               ret, (uint64_t)start, (uint64_t)(start + n - 1));
+      return buf + fn_ + (suffix ? suffix : "");
+   }
+
+   std::string TagsWriteError(off_t start, size_t n, int ret, const char *suffix = 0)
+   {
+      char buf[256];
+      snprintf(buf, sizeof(buf),
+               "error %d while writing crc32c values for pages [0x%" PRIx64":0x%" PRIx64 "] for file ",
+               ret, (uint64_t)start, (uint64_t)(start + n - 1));
+      return buf + fn_ + (suffix ? suffix : "");
    }
 
    static const size_t stsize_ = 1024;
