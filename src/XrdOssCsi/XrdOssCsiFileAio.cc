@@ -62,9 +62,8 @@ int XrdOssCsiFile::Read(XrdSfsAio *aiop)
 
    XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aiop, this, false, 0, true);
-   pmi_->pages->LockTrackinglen(nio->rg_, (off_t)aiop->sfsAio.aio_offset,
-                                     (off_t)(aiop->sfsAio.aio_offset+aiop->sfsAio.aio_nbytes), true);
-   return successor_->Read(nio);
+   nio->SchedReadJob();
+   return 0;
 }
 
 int XrdOssCsiFile::Write(XrdSfsAio *aiop)
@@ -75,18 +74,18 @@ int XrdOssCsiFile::Write(XrdSfsAio *aiop)
    XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aiop, this, false, 0, false);
    // pages will be locked when write is scheduled
-   return nio->SchedWriteJob();
+   nio->SchedWriteJob();
+   return 0;
 }
 
-int XrdOssCsiFile::pgRead (XrdSfsAio *aioparm, uint64_t opts)
+int XrdOssCsiFile::pgRead(XrdSfsAio *aioparm, uint64_t opts)
 {
    if (!pmi_) return -EBADF;
 
    XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, opts, true);
-   pmi_->pages->LockTrackinglen(nio->rg_, (off_t)aioparm->sfsAio.aio_offset,
-                                     (off_t)(aioparm->sfsAio.aio_offset+aioparm->sfsAio.aio_nbytes), true);
-   return successor_->Read(nio);
+   nio->SchedReadJob();
+   return 0;
 }
 
 int XrdOssCsiFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
@@ -109,7 +108,8 @@ int XrdOssCsiFile::pgWrite(XrdSfsAio *aioparm, uint64_t opts)
    XrdOssCsiFileAio *nio = XrdOssCsiFileAio::Alloc(&aiostore_);
    nio->Init(aioparm, this, true, pgopts, false);
    // pages will be locked when write is scheduled
-   return nio->SchedWriteJob();
+   nio->SchedWriteJob();
+   return 0;
 }
 
 int XrdOssCsiFile::Fsync(XrdSfsAio *aiop)

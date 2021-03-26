@@ -53,16 +53,49 @@ public:
       aiop_ = aiop;
       pg_   = isPg;
       read_ = read;
+      jobtype_ = (read_) ? JobReadStep1 : JobWriteStep1;
+   }
+
+   void PrepareWrite2()
+   {
+      jobtype_ = JobWriteStep2;
+   }
+
+   void PrepareRead2()
+   {
+      jobtype_ = JobReadStep2;
    }
 
    void DoIt() /* override */
    {
-      if (read_) { DoItRead(); }
-      else { DoItWrite(); }
+      switch(jobtype_)
+      {
+         case JobReadStep1:
+            // take rangelock, then submit aio read
+            DoItRead1();
+            break;
+
+         case JobReadStep2:
+            // fetch any extra bytes then verify/fetch csvec
+            DoItRead2();
+            break;
+
+         case JobWriteStep1:
+            // lock byte range, update/store csvec and queue aio write
+            DoItWrite1();
+            break;
+
+         case JobWriteStep2:
+            // check return from aio write, write any extra
+            DoItWrite2();
+            break;
+      }
    }
    
-   void DoItRead();
-   void DoItWrite();
+   void DoItRead1();
+   void DoItRead2();
+   void DoItWrite1();
+   void DoItWrite2();
 
 private:
    XrdOssCsiFile *fp_;
@@ -70,6 +103,7 @@ private:
    XrdSfsAio *aiop_;
    bool pg_;
    bool read_;
+   enum { JobReadStep1, JobReadStep2, JobWriteStep1, JobWriteStep2 } jobtype_;
 };
 
 class XrdOssCsiFileAio : public XrdSfsAio
@@ -83,80 +117,15 @@ public:
    virtual void doneRead() /* override */
    {
       parentaio_->Result = this->Result;
-      if (parentaio_->Result<0 || this->sfsAio.aio_nbytes==0)
-      {
-         parentaio_->doneRead();
-         Recycle();
-         return;
-      }
-
-      //
-      // if this is a pg operation and this was a short read, try to complete,
-      // otherwise caller will have to deal with joining csvec values from repeated reads
-      //
-      ssize_t toread = this->sfsAio.aio_nbytes - this->Result;
-      ssize_t nread = this->Result;
-
-      if (!isPgOp_)
-      {
-         // not a pg operation, no need to read more
-         toread = 0;
-      }
-      char *p = (char*)this->sfsAio.aio_buf;
-      while(toread>0)
-      {
-         const ssize_t rret = file_->successor_->Read(&p[nread], this->sfsAio.aio_offset+nread, toread);
-         if (rret == 0) break;
-         if (rret<0)
-         {
-            parentaio_->Result = rret;
-            parentaio_->doneRead();
-            Recycle();
-            return;
-         }
-         toread -= rret;
-         nread += rret;
-      }
-      parentaio_->Result = nread;
-
-      // schedule the fetchrange
-      SchedReadJob();
+      // schedule the result check and verify/fetchrange
+      SchedReadJob2();
    }
 
    virtual void doneWrite() /* override */
    {
       parentaio_->Result = this->Result;
-      if (parentaio_->Result<0)
-      {
-         rg_.ReleaseAll();
-         file_->resyncSizes();
-         parentaio_->doneWrite();
-         Recycle();
-         return;
-      }
-      // in case there was a short write during the async write, finish
-      // writing the data now, otherwise the crc values will be inconsistent
-      ssize_t towrite = this->sfsAio.aio_nbytes - this->Result;
-      ssize_t nwritten = this->Result;
-      const char *p = (const char*)this->sfsAio.aio_buf;
-      while(towrite>0)
-      {
-         const ssize_t wret = file_->successor_->Write(&p[nwritten], this->sfsAio.aio_offset+nwritten, towrite);
-         if (wret<0)
-         {
-            parentaio_->Result = wret;
-            rg_.ReleaseAll();
-            file_->resyncSizes();
-            parentaio_->doneWrite();
-            Recycle();
-            return;
-         }
-         towrite -= wret;
-         nwritten += wret;
-      }
-      parentaio_->Result = nwritten;
-      parentaio_->doneWrite();
-      Recycle();
+      // schedule the result check and write any extra
+      SchedWriteJob2();
    }
 
    virtual void Recycle()
@@ -211,10 +180,21 @@ public:
       return p;
    }
 
-   int SchedWriteJob()
+   void SchedWriteJob2()
+   {
+      job_.PrepareWrite2();
+      Sched_->Schedule((XrdJob *)&job_);
+   }
+
+   void SchedWriteJob()
    {
       Sched_->Schedule((XrdJob *)&job_);
-      return 0;
+   }
+
+   void SchedReadJob2()
+   {
+      job_.PrepareRead2();
+      Sched_->Schedule((XrdJob *)&job_);
    }
 
    void SchedReadJob()
@@ -235,10 +215,46 @@ private:
    XrdOssCsiFileAio *next_;
 };
 
-void XrdOssCsiFileAioJob::DoItRead()
+void XrdOssCsiFileAioJob::DoItRead2()
 {
    // this job runs after async Read
    // range was already locked read-only before the read
+
+   if (aiop_->Result<0 || nio_->sfsAio.aio_nbytes==0)
+   {
+      aiop_->doneRead();
+      nio_->Recycle();
+      return;
+   }
+
+   // if this is a pg operation and this was a short read, try to complete,
+   // otherwise caller will have to deal with joining csvec values from repeated reads
+
+   ssize_t toread = nio_->sfsAio.aio_nbytes - nio_->Result;
+   ssize_t nread = nio_->Result;
+
+   if (!pg_)
+   {
+      // not a pg operation, no need to read more
+      toread = 0;
+   }
+   char *p = (char*)nio_->sfsAio.aio_buf;
+   while(toread>0)
+   {
+      const ssize_t rret = fp_->successor_->Read(&p[nread], nio_->sfsAio.aio_offset+nread, toread);
+      if (rret == 0) break;
+      if (rret<0)
+      {
+         aiop_->Result = rret;
+         aiop_->doneRead();
+         nio_->Recycle();
+         return;
+      }
+      toread -= rret;
+      nread += rret;
+   }
+   aiop_->Result = nread;
+
    ssize_t puret;
    if (pg_)
    {
@@ -270,7 +286,25 @@ void XrdOssCsiFileAioJob::DoItRead()
    nio_->Recycle();
 }
 
-void XrdOssCsiFileAioJob::DoItWrite()
+void XrdOssCsiFileAioJob::DoItRead1()
+{
+   // this job takes rangelock and then queues aio read
+
+   // lock range
+   fp_->Pages()->LockTrackinglen(nio_->rg_, (off_t)aiop_->sfsAio.aio_offset,
+                                (off_t)(aiop_->sfsAio.aio_offset+aiop_->sfsAio.aio_nbytes), true);
+
+   const int ret = fp_->successor_->Read(nio_);
+   if (ret<0)
+   {
+      aiop_->Result = ret;
+      aiop_->doneRead();
+      nio_->Recycle();
+      return;
+   }
+}
+
+void XrdOssCsiFileAioJob::DoItWrite1()
 {
    // this job runs before async Write
 
@@ -310,8 +344,44 @@ void XrdOssCsiFileAioJob::DoItWrite()
       nio_->Recycle();
       return;
    }
+}
 
-   return;
+void XrdOssCsiFileAioJob::DoItWrite2()
+{
+   // this job runs after the async Write
+
+   if (aiop_->Result<0)
+   {
+      nio_->rg_.ReleaseAll();
+      fp_->resyncSizes();
+      aiop_->doneWrite();
+      nio_->Recycle();
+      return;
+   }
+
+   // in case there was a short write during the async write, finish
+   // writing the data now, otherwise the crc values will be inconsistent
+   ssize_t towrite = nio_->sfsAio.aio_nbytes - nio_->Result;
+   ssize_t nwritten = nio_->Result;
+   const char *p = (const char*)nio_->sfsAio.aio_buf;
+   while(towrite>0)
+   {
+      const ssize_t wret = fp_->successor_->Write(&p[nwritten], nio_->sfsAio.aio_offset+nwritten, towrite);
+      if (wret<0)
+      {
+         aiop_->Result = wret;
+         nio_->rg_.ReleaseAll();
+         fp_->resyncSizes();
+         aiop_->doneWrite();
+         nio_->Recycle();
+         return;
+      }
+      towrite -= wret;
+      nwritten += wret;
+   }
+   aiop_->Result = nwritten;
+   aiop_->doneWrite();
+   nio_->Recycle();
 }
 
 #endif
