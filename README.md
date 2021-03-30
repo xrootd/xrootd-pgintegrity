@@ -59,4 +59,14 @@ This option prevents pgWrite from writing past the current end-of-file
 when the file length is not a multiple of the page size. This approximates
 the behaviour of an original version of pgWrite. The check is not applied
 in case of a missing tagfile.
+
+noloosewrites
+Disables some consistency and recovery checks at open and during non-aligned
+writes in previously existing files: When writing to a file such that only
+part of a page is overwritten checks can be made that the page is valid before
+the write happens. By default, for existing files, checks are
+applied that allow some inconsistenies, such as if the stored crc already
+corresponds to the updated page which is to be written in the datafile.
+The aim is to provide recovery in the case of interrupted and then retried
+writes (e.g. due to a crash).
 ```

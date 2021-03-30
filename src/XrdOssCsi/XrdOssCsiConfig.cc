@@ -2,7 +2,7 @@
 /*                                                                            */
 /*                   X r d O s s C s i C o n f i g . c c                      */
 /*                                                                            */
-/* (C) Copyright 2020 CERN.                                                   */
+/* (C) Copyright 2021 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -82,6 +82,10 @@ int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char
       {
          disablePgExtend_ = true;
       }
+      else if (item == "noloosewrites")
+      {
+         disableLooseWrite_ = true;
+      }
    }
 
    if (NoGo) return NoGo;
@@ -90,12 +94,13 @@ int XrdOssCsiConfig::Init(XrdSysError &Eroute, const char *config_fn, const char
    if (getenv("XRDDEBUG")) OssCsiTrace.What = TRACE_ALL;
    if (readConfig(Eroute, config_fn)) return 1;
 
-   Eroute.Say("       compute file holes: ", fillFileHole_ ? "yes" : "no");
-   Eroute.Say("       space name: ", xrdtSpaceName_.c_str());
+   Eroute.Say("       compute file holes      : ", fillFileHole_ ? "yes" : "no");
+   Eroute.Say("       space name              : ", xrdtSpaceName_.c_str());
    Eroute.Say("       allow files without CRCs: ", allowMissingTags_ ? "yes" : "no");
-   Eroute.Say("       stop pgWrite from extending partial page: ", disablePgExtend_ ? "yes" : "no");
-   Eroute.Say("       trace level: ", std::to_string((long long int)OssCsiTrace.What).c_str());
-   Eroute.Say("       prefix: ", tagParam_.prefix_.empty() ? "[empty]" : tagParam_.prefix_.c_str());
+   Eroute.Say("       pgWrite can extend      : ", disablePgExtend_ ? "no" : "yes");
+   Eroute.Say("       loose writes            : ", disableLooseWrite_ ? "no" : "yes");
+   Eroute.Say("       trace level             : ", std::to_string((long long int)OssCsiTrace.What).c_str());
+   Eroute.Say("       prefix                  : ", tagParam_.prefix_.empty() ? "[empty]" : tagParam_.prefix_.c_str());
 
    Eroute.Say("++++++ OssCsi plugin initialization completed.");
 

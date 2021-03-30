@@ -32,6 +32,7 @@
 /******************************************************************************/
 
 #include "XrdSys/XrdSysPthread.hh"
+#include "XrdSys/XrdSysPageSize.hh"
 
 #include "XrdOssCsiTagstore.hh"
 #include "XrdOssCsiRanges.hh"
@@ -46,25 +47,27 @@ class XrdOssCsiPages
 public:
    typedef std::pair<off_t,off_t> Sizes_t;
 
-   XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, bool dpe, const char *);
+   XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, bool dpe, bool dlw, const char *);
    ~XrdOssCsiPages() { (void)Close(); }
 
    int Open(const char *path, off_t dsize, int flags, XrdOucEnv &envP);
    int Close();
 
    int UpdateRange(XrdOssDF *, const void *, off_t, size_t, XrdOssCsiRangeGuard&);
-   ssize_t VerifyRange(XrdOssDF *, const void *, off_t, size_t, XrdOssCsiRangeGuard&);
+   int VerifyRange(XrdOssDF *, const void *, off_t, size_t, XrdOssCsiRangeGuard&);
    void Flush();
    int Fsync();
 
-   ssize_t FetchRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssCsiRangeGuard&);
+   void BasicConsistencyCheck(XrdOssDF *);
+
+   int FetchRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssCsiRangeGuard&);
    int StoreRange(XrdOssDF *, const void *, off_t, size_t, uint32_t *, uint64_t, XrdOssCsiRangeGuard&);
    void LockTrackinglen(XrdOssCsiRangeGuard &, off_t, off_t, bool);
 
    bool IsReadOnly() const { return rdonly_; }
    int truncate(XrdOssDF *, off_t, XrdOssCsiRangeGuard&);
    int TrackedSizesGet(Sizes_t &, bool);
-   int LockResetSizes(off_t);
+   int LockResetSizes(XrdOssDF *, off_t);
    void TrackedSizeRelease();
    int VerificationStatus();
 
@@ -81,6 +84,8 @@ protected:
    bool disablePgExtend_;
    bool hasMissingTags_;
    bool rdonly_;
+   const bool loosewriteConfigured_;
+   bool loosewrite_;
 
    XrdSysCondVar tscond_;
    bool tsforupdate_;
@@ -91,6 +96,10 @@ protected:
    const std::string tident_;
    const char *tident;
 
+   // used by the loosewrite checks
+   off_t lastpgforloose_;
+   bool checklastpg_;
+
    int LockSetTrackedSize(off_t);
    int LockTruncateSize(off_t,bool);
    int LockMakeUnverified();
@@ -98,10 +107,10 @@ protected:
    int UpdateRangeAligned(const void *, off_t, size_t, const Sizes_t &);
    int UpdateRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
    int UpdateRangeHoleUntilPage(XrdOssDF *, off_t, const Sizes_t &);
-   ssize_t VerifyRangeAligned(const void *, off_t, size_t, const Sizes_t &);
-   ssize_t VerifyRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
-   ssize_t FetchRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
-   ssize_t FetchRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
+   int VerifyRangeAligned(const void *, off_t, size_t, const Sizes_t &);
+   int VerifyRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &);
+   int FetchRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
+   int FetchRangeUnaligned(XrdOssDF *, const void *, off_t, size_t, const Sizes_t &, uint32_t *, uint64_t);
    int FetchRangeUnaligned_preblock(XrdOssDF *, const void *, off_t, size_t, off_t, uint32_t *, uint32_t *, uint64_t);
    int FetchRangeUnaligned_postblock(XrdOssDF *, const void *, off_t, size_t, off_t, uint32_t *, uint32_t *, size_t, uint64_t);
    int StoreRangeAligned(const void *, off_t, size_t, const Sizes_t &, uint32_t *);
@@ -118,11 +127,13 @@ protected:
       return rret;
    }
 
-   static ssize_t maxread(XrdOssDF *fd, void *buff, const off_t off , const size_t sz)
+   // keep calling read until EOF, an error or the number of bytes read is between tg and sz.
+   static ssize_t maxread(XrdOssDF *fd, void *buff, const off_t off , const size_t sz, size_t tg=0)
    {
       size_t toread = sz, nread = 0;
       uint8_t *p = (uint8_t*)buff;
-      while(toread>0)
+      tg = tg ? tg : sz;
+      while(toread>0 && nread<tg)
       {
          const ssize_t rret = fd->Read(&p[nread], off+nread, toread);
          if (rret<0) return rret;
@@ -133,7 +144,7 @@ protected:
       return nread;
    }
 
-   std::string CRCMismatchError(size_t blen, off_t off, uint32_t got, uint32_t expected)
+   std::string CRCMismatchError(size_t blen, off_t pgnum, uint32_t got, uint32_t expected)
    {
       char buf[256],buf2[256];
       snprintf(buf, sizeof(buf),
@@ -141,7 +152,7 @@ protected:
                (uint32_t)blen);
       snprintf(buf2, sizeof(buf2),
                " at offset 0x%" PRIx64 ", got 0x%08" PRIx32 ", expected 0x%08" PRIx32,
-               (uint64_t)off,
+               (uint64_t)(pgnum*XrdSys::PageSize),
                got, expected);
       return buf + fn_ + buf2;
    }
@@ -153,13 +164,13 @@ protected:
                "unexpected byte mismatch between user-buffer and page/0x%04" PRIx32 " in file ",
                (uint32_t)blen);
       snprintf(buf2, sizeof(buf2),
-               " at offset 0x%" PRIx64 ", user-byte 0x%02x, page-byte 0x%02x",
+               " at offset 0x%" PRIx64 ", user-byte 0x%02" PRIx8 ", page-byte 0x%02" PRIx8,
                (uint64_t)off,
                user, page);
       return buf + fn_ + buf2;
    }
 
-   std::string PageReadError(size_t blen, off_t off, int ret)
+   std::string PageReadError(size_t blen, off_t pgnum, int ret)
    {
       char buf[256],buf2[256];
       snprintf(buf, sizeof(buf),
@@ -167,26 +178,26 @@ protected:
                ret, (uint32_t)blen);
       snprintf(buf2, sizeof(buf2),
                " at offset 0x%" PRIx64,
-               (uint64_t)off);
+               (uint64_t)(pgnum*XrdSys::PageSize));
       return buf + fn_ + buf2;
    }
 
-   std::string TagsReadError(off_t start, size_t n, int ret, const char *suffix = 0)
+   std::string TagsReadError(off_t start, size_t n, int ret)
    {
       char buf[256];
       snprintf(buf, sizeof(buf),
                "error %d while reading crc32c values for pages [0x%" PRIx64":0x%" PRIx64 "] for file ",
                ret, (uint64_t)start, (uint64_t)(start + n - 1));
-      return buf + fn_ + (suffix ? suffix : "");
+      return buf + fn_;
    }
 
-   std::string TagsWriteError(off_t start, size_t n, int ret, const char *suffix = 0)
+   std::string TagsWriteError(off_t start, size_t n, int ret)
    {
       char buf[256];
       snprintf(buf, sizeof(buf),
                "error %d while writing crc32c values for pages [0x%" PRIx64":0x%" PRIx64 "] for file ",
                ret, (uint64_t)start, (uint64_t)(start + n - 1));
-      return buf + fn_ + (suffix ? suffix : "");
+      return buf + fn_;
    }
 
    static const size_t stsize_ = 1024;

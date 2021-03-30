@@ -70,7 +70,7 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
          TRACE(Warn, "Unexpected partially filled last page " << fn_);
          return -EDOM;
       }
-      // assume tag for last page is correct; if not it can be discovered during a later read
+
       uint32_t prevtag;
       const ssize_t rret = ts_->ReadTags(&prevtag, tracked_page, 1);
       if (rret < 0)
@@ -78,11 +78,14 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
          TRACE(Warn, TagsReadError(tracked_page, 1, rret));
          return rret;
       }
+
+      // extend prevtag up to PageSize. If there is a mismatch it will only be
+      // discovered during a later read (but this saves a read now).
       const uint32_t crc32c = CrcUtils.crc32c_extendwith_zero(prevtag, XrdSys::PageSize - tracked_off);
       const ssize_t wret = ts_->WriteTags(&crc32c, tracked_page, 1);
       if (wret < 0)
       {
-         TRACE(Warn, TagsWriteError(tracked_page, 1, wret, " (prev)"));
+         TRACE(Warn, TagsWriteError(tracked_page, 1, wret) << " (prev)");
          return wret;
       }
    }
@@ -100,7 +103,7 @@ int XrdOssCsiPages::UpdateRangeHoleUntilPage(XrdOssDF *fd, const off_t until, co
       const ssize_t wret = ts_->WriteTags(&crc32Vec[0], firstEmpty+nwritten, nw);
       if (wret<0)
       {
-         TRACE(Warn, TagsWriteError(firstEmpty+nwritten, nw, wret, " (new)"));
+         TRACE(Warn, TagsWriteError(firstEmpty+nwritten, nw, wret) << " (new)");
          return wret;
       }
       towrite -= wret;
@@ -121,6 +124,9 @@ int XrdOssCsiPages::UpdateRangeUnaligned(XrdOssDF *const fd, const void *buff, c
 
 //
 // used by StoreRangeUnaligned when the supplied data does not cover the whole of the first corresponding page in the file
+//
+// offset: offset in file for start of write
+// blen:   length of write in first page
 //
 int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void *const buff, const size_t blen,
                                                  const off_t offset, const off_t trackinglen,
@@ -153,20 +159,120 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
    if (p1 == tracked_page && p1_off >= tracked_off)
    {
       // appending: with or without some implied zeros.
-      // can recalc crc with new data without re-reading existing partial block's data
+
+      // zero initialised value may be used
       uint32_t crc32v = 0;
       if (tracked_off > 0)
       {
          const ssize_t rret = ts_->ReadTags(&crc32v, p1, 1);
          if (rret<0)
          {
-            TRACE(Warn, TagsReadError(p1, 1, rret, " (append)"));
+            TRACE(Warn, TagsReadError(p1, 1, rret) << " (append)");
             return rret;
          }
       }
-      const size_t nz = p1_off - tracked_off;
-      uint32_t crc32c = crc32v;
-      crc32c = CrcUtils.crc32c_extendwith_zero(crc32c, nz);
+
+      uint32_t crc32c = 0;
+
+      // only do the loosewrite extending check one time for the page which was the
+      // last page according to the trackinglen at time the check was configured (open or size-resync).
+      // don't do the check every time because it needs an extra read compared to the non loose case;
+      // checklastpg_ is checked and modified here, but is protected from concurrent
+      // access because of the condition that p1==lastpgforloose_
+
+      if (loosewrite_ && p1==lastpgforloose_ && checklastpg_)
+      {
+         checklastpg_ = false;
+         uint8_t b[XrdSys::PageSize];
+
+         // this will reissue read() until eof, or tracked_off bytes read but accept up to PageSize
+         const ssize_t rlen = XrdOssCsiPages::maxread(fd, b, XrdSys::PageSize * p1, XrdSys::PageSize, tracked_off);
+
+         if (rlen<0)
+         {
+            TRACE(Warn, PageReadError(tracked_off, p1, rlen));
+            return rlen;
+         }
+         memset(&b[rlen], 0, XrdSys::PageSize - rlen);
+
+         // in the loose-write mode, the new crc is based on the crc of data
+         // read from file up to p1_off, not on the previously stored tag.
+         // However must check if the data read were consistent with stored tag (crc32v)
+
+         uint32_t crc32x = XrdOucCRC::Calc32C(b, tracked_off, 0u);
+         crc32c = XrdOucCRC::Calc32C(&b[tracked_off], p1_off-tracked_off, crc32x);
+
+         do
+         {
+            if (static_cast<size_t>(rlen) == tracked_off)
+            {
+               // this is the expected match
+               if (tracked_off==0 || crc32x == crc32v) break;
+            }
+
+            // any bytes on disk beyond p1_off+blan would not be included in the new crc.
+            // if tracked_off==0 we have no meaningful crc32v value.
+            if ((tracked_off>0 || p1_off==0) && static_cast<size_t>(rlen) <= p1_off+blen)
+            {
+               
+               if (tracked_off != 0)
+               {
+                  TRACE(Warn, CRCMismatchError(tracked_off, p1, crc32x, crc32v) << " (loose match, still trying)");
+               }
+
+               // there was no tag recorded for the page, and we're completely overwriting anything on disk in the page
+               if (tracked_off==0)
+               {
+                  TRACE(Warn, "Recovered page with no tag at offset " << (XrdSys::PageSize * p1) <<
+                              " of file " << fn_ << " rlen=" << rlen << " (append)");
+                  break;
+               }
+
+               if (static_cast<size_t>(rlen) != tracked_off && rlen>0)
+               {
+                  crc32x = XrdOucCRC::Calc32C(b, rlen, 0u);
+                  if (crc32x == crc32v)
+                  {
+                     TRACE(Warn, "Recovered page at offset " << (XrdSys::PageSize * p1)+p1_off << " of file " << fn_ << " (append)");
+                     break;
+                  }
+                  TRACE(Warn, CRCMismatchError(rlen, p1, crc32x, crc32v) << " (loose match, still trying)");
+               }
+
+               memcpy(&b[p1_off], buff, blen);
+               crc32x = XrdOucCRC::Calc32C(b, p1_off+blen, 0u);
+               if (crc32x == crc32v)
+               {
+                  TRACE(Warn, "Recovered matching write at offset " << (XrdSys::PageSize * p1)+p1_off <<
+                              " of file " << fn_ << " (append)");
+                  break;
+               }
+               TRACE(Warn, CRCMismatchError(p1_off+blen, p1, crc32x, crc32v) << " (append)");
+            }
+            else
+            {
+               if (tracked_off>0)
+               {
+                  TRACE(Warn, CRCMismatchError(tracked_off, p1, crc32x, crc32v) << " (append)");
+               }
+               else
+               {
+                  TRACE(Warn, "Unexpected content, write at page at offset " << (XrdSys::PageSize * p1) <<
+                              " of file " << fn_ << ", offset-in-page=" << p1_off << " rlen=" << rlen << " (append)");
+               }
+            }
+            return -EDOM;
+         } while(0);
+      }
+      else
+      {  
+         // non-loose case;
+         // can recalc crc with new data without re-reading existing partial block's data
+         const size_t nz = p1_off - tracked_off;
+         crc32c = CrcUtils.crc32c_extendwith_zero(crc32v, nz);
+      }
+
+      // crc32c is crc up to p1_off. Now add the user's data.
       if (csvec)
       {
          crc32c = CrcUtils.crc32c_combine(crc32c, csvec[0], blen);
@@ -189,29 +295,98 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
    assert(p1_off !=0 || blen<bavail);
    uint8_t b[XrdSys::PageSize];
 
-   ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, bavail);
-   if (rret<0)
-   {
-      TRACE(Warn, PageReadError(bavail, XrdSys::PageSize * p1, rret));
-      return rret;
-   }
-   uint32_t crc32c = XrdOucCRC::Calc32C(b, bavail, 0U);
    uint32_t crc32v;
-   rret = ts_->ReadTags(&crc32v, p1, 1);
+   ssize_t rret = ts_->ReadTags(&crc32v, p1, 1);
    if (rret<0)
    {
-      TRACE(Warn, TagsReadError(p1, 1, rret, " (overwrite)"));
+      TRACE(Warn, TagsReadError(p1, 1, rret) << " (overwrite)");
       return rret;
-   }
-   // this may be an implicit verification (e.g. pgWrite may return EDOM without Verify requested)
-   // however, it's not clear if there is a meaningful way to crc a mismatching page during a partial update
-   if (crc32v != crc32c)
-   {
-      TRACE(Warn, CRCMismatchError(bavail, XrdSys::PageSize*p1, crc32c, crc32v));
-      return -EDOM;
    }
 
-   crc32c = XrdOucCRC::Calc32C(b, p1_off, 0U);
+   // in either loosewrite or non-loosewrite a read-modify-write sequence is done and the
+   // final crc is that of the modified block. The difference between loose and non-loose
+   // case if that the looser checks are done on the block.
+   //
+   // in either case there are implicit verification(s) (e.g. pgWrite may return EDOM without Verify requested)
+   // as it's not clear if there is a meaningful way to crc a mismatching page during a partial overwrite
+
+   if (loosewrite_)
+   {
+      // this will reissue read() until eof, or bavail bytes read but accept up to PageSize
+      const ssize_t rlen = XrdOssCsiPages::maxread(fd, b, XrdSys::PageSize * p1, XrdSys::PageSize, bavail);
+      if (rlen<0)
+      {
+         TRACE(Warn, PageReadError(bavail, p1, rlen));
+         return rlen;
+      }
+      memset(&b[rlen], 0, XrdSys::PageSize - rlen);
+      do
+      {
+         uint32_t crc32c = XrdOucCRC::Calc32C(b, bavail, 0U);
+         // this is the expected case
+         if (static_cast<size_t>(rlen) == bavail && crc32c == crc32v) break;
+
+         // after this write there will be nothing changed between p1_off+blen
+         // and bavail; if there is nothing on disk in this range it will not
+         // be added by the write. So don't try to match crc with implied zero
+         // in this range. Beyond bavail bytes on disk will not be included
+         // in the new crc.
+         const size_t rmin = (p1_off+blen < bavail) ? bavail : 0;
+         if (static_cast<size_t>(rlen) >= rmin && static_cast<size_t>(rlen)<=bavail)
+         {
+            if (crc32c == crc32v)
+            {
+               TRACE(Warn, "Recovered page at offset " << (XrdSys::PageSize * p1) << " of file " << fn_ << " (overwrite)");
+               break;
+            }
+            TRACE(Warn, CRCMismatchError(bavail, p1, crc32c, crc32v) << " (loose match, still trying)");
+
+            if (static_cast<size_t>(rlen) != bavail && rlen > 0)
+            {
+               crc32c = XrdOucCRC::Calc32C(b, rlen, 0U);
+               if (crc32c == crc32v)
+               {
+                  TRACE(Warn, "Recovered page (2) at offset " << (XrdSys::PageSize * p1) << " of file " << fn_ << " (overwrite)");
+                  break;
+               }
+               TRACE(Warn, CRCMismatchError(rlen, p1, crc32c, crc32v) << " (loose match, still trying)");
+            }
+
+            memcpy(&b[p1_off], buff, blen);
+            const size_t vl = std::max(bavail, p1_off+blen);
+            crc32c = XrdOucCRC::Calc32C(b, vl, 0U);
+            if (crc32c == crc32v)
+            {
+               TRACE(Warn, "Recovered matching write at offset " << (XrdSys::PageSize * p1)+p1_off << " of file " << fn_ << " (overwrite)");
+               break;
+            }
+            TRACE(Warn, CRCMismatchError(vl, p1, crc32c, crc32v) << " (overwrite)");
+         }
+         else
+         {
+            TRACE(Warn, CRCMismatchError(bavail, p1, crc32c, crc32v) << " (overwrite)");
+         }
+         return -EDOM;
+      } while(0);
+   }
+   else
+   {
+      // non-loose case
+      rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p1, bavail);
+      if (rret<0)
+      {
+         TRACE(Warn, PageReadError(bavail, p1, rret));
+         return rret;
+      }
+      const uint32_t crc32c = XrdOucCRC::Calc32C(b, bavail, 0U);
+      if (crc32v != crc32c)
+      {
+         TRACE(Warn, CRCMismatchError(bavail, p1, crc32c, crc32v));
+         return -EDOM;
+      }
+   }
+
+   uint32_t crc32c = XrdOucCRC::Calc32C(b, p1_off, 0U);
    if (csvec)
    {
       crc32c = CrcUtils.crc32c_combine(crc32c, csvec[0], blen);
@@ -232,6 +407,9 @@ int XrdOssCsiPages::StoreRangeUnaligned_preblock(XrdOssDF *const fd, const void 
 //
 // used by StoreRangeUnaligned when the end of supplied data is not page aligned
 // and is before the end of file
+//
+// offset: first offset in file at which write is page aligned
+// blen:   length of write after offset
 //
 int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void *const buff, const size_t blen,
                                                   const off_t offset, const off_t trackinglen,
@@ -255,33 +433,29 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
    // how much of that data will not be overwritten
    const size_t bremain = (p2_off < bavail) ? bavail-p2_off : 0;
 
-   uint8_t b[XrdSys::PageSize];
-   if (bremain>0)
+   // we should not be called if it is a complete overwrite
+   assert(bremain>0);
+
+   // need to use remaining data to calculate the crc of the new p2 page.
+   // read and verify it now.
+
+   uint32_t crc32v;
+   ssize_t rret = ts_->ReadTags(&crc32v, p2, 1);
+   if (rret<0)
    {
-      // if any data will remain will need to use it to calculate the crc of the new p2 page.
-      // read and verify it now.
-      ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p2, bavail);
-      if (rret<0)
-      {
-         TRACE(Warn, PageReadError(bavail, XrdSys::PageSize * p2, rret));
-         return rret;
-      }
-      const uint32_t crc32c = XrdOucCRC::Calc32C(b, bavail, 0U);
-      uint32_t crc32v;
-      rret = ts_->ReadTags(&crc32v, p2, 1);
-      if (rret<0)
-      {
-         TRACE(Warn, TagsReadError(p2, 1, rret));
-         return rret;
-      }
-      // this may be an implicit verification (e.g. pgWrite may return EDOM without Verify requested)
-      // however, it's not clear if there is a meaningful way to crc a mismatching page during a partial update
-      if (crc32v != crc32c)
-      {
-         TRACE(Warn, CRCMismatchError(bavail, XrdSys::PageSize*p2, crc32c, crc32v));
-         return -EDOM;
-      }
+      TRACE(Warn, TagsReadError(p2, 1, rret));
+      return rret;
    }
+
+   uint8_t b[XrdSys::PageSize];
+   rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize * p2, bavail);
+   if (rret<0)
+   {
+      TRACE(Warn, PageReadError(bavail, p2, rret));
+      return rret;
+   }
+
+   // calculate crc of new data with remaining data at the end:
    uint32_t crc32c = 0;
    if (csvec)
    {
@@ -291,11 +465,41 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
    {
       crc32c = XrdOucCRC::Calc32C(&p[blen-p2_off], p2_off, 0U);
    }
-   if (bremain>0)
+
+   const uint32_t cl = XrdOucCRC::Calc32C(&b[p2_off], bremain, 0U);
+   // crc of page with new data
+   crc32c = CrcUtils.crc32c_combine(crc32c, cl, bremain);
+   // crc of current page (before write)
+   const uint32_t crc32prev = XrdOucCRC::Calc32C(b, bavail, 0U);
+
+   // check(s) to see if remaining data was valid
+
+   // usual check; unmodified block is consistent with stored crc
+   // for loose write we allow case were the new data have already been written to the datafile
+
+   // this may be an implicit verification (e.g. pgWrite may return EDOM without Verify requested)
+   // however, it's not clear if there is a meaningful way to crc a mismatching page during a partial overwrite
+   if (crc32v != crc32prev)
    {
-      const uint32_t cl = XrdOucCRC::Calc32C(&b[p2_off], bremain, 0U);
-      crc32c = CrcUtils.crc32c_combine(crc32c, cl, bremain);
+      if (loosewrite_ && crc32c != crc32prev)
+      {
+         // log that we chceked if the tag was matching the previous data
+         TRACE(Warn, CRCMismatchError(bavail, p2, crc32prev, crc32v) << " (loose match, still trying)");
+         if (crc32c == crc32v)
+         {
+            TRACE(Warn, "Recovered matching write at offset " << (XrdSys::PageSize * p2) << " of file " << fn_);
+            lastpageval = crc32c;
+            return 0;
+         }
+         TRACE(Warn, CRCMismatchError(bavail, p2, crc32c, crc32v));
+      }
+      else
+      {
+         TRACE(Warn, CRCMismatchError(bavail, p2, crc32prev, crc32v));
+      }
+      return -EDOM;
    }
+
    lastpageval = crc32c;
    return 0;
 }
@@ -404,13 +608,16 @@ int XrdOssCsiPages::StoreRangeUnaligned(XrdOssDF *const fd, const void *buff, co
 // 
 // Used by Read for various cases with mis-alignment. See FetchRangeUnaligned for list of conditions.
 //
-ssize_t XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
+int XrdOssCsiPages::VerifyRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
   return FetchRangeUnaligned(fd, buff, offset, blen, sizes, NULL, XrdOssDF::Verify);
 }
 
 //
 // used by FetchRangeUnaligned when only part of the data in the first page is needed, or the page is short
+//
+// offset: offset in file for start of read
+// blen:   total length of read
 //
 int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen,
                                                  const off_t trackinglen, uint32_t *const tbuf, uint32_t *const csvec, const uint64_t opts)
@@ -435,7 +642,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void 
       const ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p1, bavail);
       if (rret<0)
       {
-         TRACE(Warn, PageReadError(bavail, XrdSys::PageSize*p1, rret));
+         TRACE(Warn, PageReadError(bavail, p1, rret));
          return rret;
       }
       // if we're going to verify, make sure we just read the same overlapping data as that in the user's buffer
@@ -445,6 +652,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void 
          {
             size_t badoff;
             for(badoff=0;badoff<bcommon;badoff++) { if (((uint8_t*)buff)[badoff] != b[p1_off+badoff]) break; }
+            badoff = (badoff < bcommon) ? badoff : 0; // may be possible with concurrent modification
             TRACE(Warn, ByteMismatchError(bavail, XrdSys::PageSize*p1+p1_off+badoff, ((uint8_t*)buff)[badoff], b[p1_off+badoff]));
             return -EDOM;
          }
@@ -457,7 +665,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void 
       const uint32_t crc32calc = XrdOucCRC::Calc32C(ub, bavail, 0U);
       if (tbuf[0] != crc32calc)
       {
-         TRACE(Warn, CRCMismatchError(bavail, XrdSys::PageSize*p1, crc32calc, tbuf[0]));
+         TRACE(Warn, CRCMismatchError(bavail, p1, crc32calc, tbuf[0]));
          return -EDOM;
       }
    }
@@ -496,6 +704,9 @@ int XrdOssCsiPages::FetchRangeUnaligned_preblock(XrdOssDF *const fd, const void 
 //
 // used by FetchRangeUnaligned when only part of a page of data is needed from the last page
 //
+// offset: offset in file for start of read
+// blen:   total length of read
+//
 int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen,
                                                  const off_t trackinglen, uint32_t *const tbuf, uint32_t *const csvec, const size_t tidx, const uint64_t opts)
 {
@@ -516,7 +727,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void
       const ssize_t rret = XrdOssCsiPages::fullread(fd, b, XrdSys::PageSize*p2, bavail);
       if (rret<0)
       {
-         TRACE(Warn, PageReadError(bavail, XrdSys::PageSize*p2, rret));
+         TRACE(Warn, PageReadError(bavail, p2, rret));
          return rret;
       }
       // if we're verifying make sure overlapping part of data just read matches user's buffer
@@ -527,6 +738,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void
          {
             size_t badoff;
             for(badoff=0;badoff<p2_off;badoff++) { if (p[blen-p2_off+badoff] != b[badoff]) break; }
+            badoff = (badoff < p2_off) ? badoff : 0; // may be possible with concurrent modification
             TRACE(Warn, ByteMismatchError(bavail, XrdSys::PageSize*p2+badoff, p[blen-p2_off+badoff], b[badoff]));
             return -EDOM;
          }
@@ -538,7 +750,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void
       const uint32_t crc32calc = XrdOucCRC::Calc32C(ub, bavail, 0U);
       if (tbuf[tidx] != crc32calc)
       {
-         TRACE(Warn, CRCMismatchError(bavail, XrdSys::PageSize*p2, crc32calc, tbuf[tidx]));
+         TRACE(Warn, CRCMismatchError(bavail, p2, crc32calc, tbuf[tidx]));
          return -EDOM;
       }
    }
@@ -571,7 +783,7 @@ int XrdOssCsiPages::FetchRangeUnaligned_postblock(XrdOssDF *const fd, const void
 // Used by pgRead/Read when reading a range not starting at a page boundary within the file
 // OR when the length is not a multiple of the page-size and the read finishes not at the end of file.
 //
-ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *const csvec, const uint64_t opts)
+int XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes, uint32_t *const csvec, const uint64_t opts)
 {
    EPNAME("FetchRangeUnaligned");
 
@@ -601,7 +813,7 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
    ssize_t rret = ts_->ReadTags(tbuf, ntagsbase, tcnt);
    if (rret<0)
    {
-      TRACE(Warn, TagsReadError(ntagsbase, tcnt, rret, " (first)"));
+      TRACE(Warn, TagsReadError(ntagsbase, tcnt, rret) << " (first)");
       return rret;
    }
    ntagstoread -= tcnt;
@@ -646,7 +858,7 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
                rret = ts_->ReadTags(tbuf, ntagsbase, tcnt);
                if (rret<0)
                {
-                  TRACE(Warn, TagsReadError(ntagsbase, tcnt, rret, " (mid)"));
+                  TRACE(Warn, TagsReadError(ntagsbase, tcnt, rret) << " (mid)");
                   return rret;
                }
                ntagstoread -= tcnt;
@@ -657,7 +869,7 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
                size_t badpg;
                for(badpg=0;badpg<nv;badpg++) { if (memcmp(&calcbuf[nvalid+badpg], &tbuf[tidx+badpg],4)) break; }
                TRACE(Warn, CRCMismatchError(XrdSys::PageSize,
-                                            XrdSys::PageSize*(ntagsbase+tidx+badpg),
+                                            (ntagsbase+tidx+badpg),
                                             calcbuf[nvalid+badpg], tbuf[tidx+badpg]));
                return -EDOM;
             }
@@ -683,7 +895,7 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
          rret = ts_->ReadTags(tbuf, ntagsbase, 1);
          if (rret<0)
          {
-            TRACE(Warn, TagsReadError(ntagsbase, 1, rret, " (last)"));
+            TRACE(Warn, TagsReadError(ntagsbase, 1, rret) << " (last)");
             return rret;
          }
          ntagstoread = 0;
@@ -696,5 +908,5 @@ ssize_t XrdOssCsiPages::FetchRangeUnaligned(XrdOssDF *const fd, const void *cons
       }
    }
 
-   return blen;
+   return 0;
 }

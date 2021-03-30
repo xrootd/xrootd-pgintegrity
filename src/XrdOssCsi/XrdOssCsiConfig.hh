@@ -4,7 +4,7 @@
 /*                                                                            */
 /*                   X r d O s s C s i C o n f i g . h h                      */
 /*                                                                            */
-/* (C) Copyright 2020 CERN.                                                   */
+/* (C) Copyright 2021 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -162,7 +162,7 @@ class XrdOssCsiConfig
 {
 public:
 
-  XrdOssCsiConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true), disablePgExtend_(false) { }
+  XrdOssCsiConfig() : fillFileHole_(true), xrdtSpaceName_("public"), allowMissingTags_(true), disablePgExtend_(false), disableLooseWrite_(false) { }
   ~XrdOssCsiConfig() { }
 
   int Init(XrdSysError &, const char *, const char *, XrdOucEnv *);
@@ -174,6 +174,8 @@ public:
   bool allowMissingTags() const { return allowMissingTags_; }
 
   bool disablePgExtend() const { return disablePgExtend_; }
+
+  bool disableLooseWrite() const { return disableLooseWrite_; }
 
   TagPath tagParam_;
 
@@ -188,6 +190,7 @@ private:
   std::string xrdtSpaceName_;
   bool allowMissingTags_;
   bool disablePgExtend_;
+  bool disableLooseWrite_;
 };
 
 #endif

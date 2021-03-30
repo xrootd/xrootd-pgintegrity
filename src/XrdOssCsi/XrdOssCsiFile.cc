@@ -257,8 +257,11 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
    }
 
    std::unique_ptr<XrdOssDF> integFile(parentOss_->newFile(tident));
-   std::unique_ptr<XrdOssCsiTagstore> ts(new XrdOssCsiTagstoreFile(pmi_->dpath, std::move(integFile), tident));
-   std::unique_ptr<XrdOssCsiPages> pages(new XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(), config_.disablePgExtend(), tident));
+   std::unique_ptr<XrdOssCsiTagstore> ts(new
+      XrdOssCsiTagstoreFile(pmi_->dpath, std::move(integFile), tident));
+   std::unique_ptr<XrdOssCsiPages> pages(new
+      XrdOssCsiPages(pmi_->dpath, std::move(ts), config_.fillFileHole(), config_.allowMissingTags(),
+                     config_.disablePgExtend(), config_.disableLooseWrite(), tident));
 
    int puret = pages->Open(pmi_->tpath.c_str(), dsize, tagFlags, *tagEnv);
    if (puret<0)
@@ -275,6 +278,7 @@ int XrdOssCsiFile::createPageUpdater(const int Oflag, XrdOucEnv &Env)
       return puret;
    }
 
+   pages->BasicConsistencyCheck(successor_);
    pmi_->pages = std::move(pages);
    return XrdOssOK;
 }
@@ -350,10 +354,6 @@ ssize_t XrdOssCsiFile::Read(void *buff, off_t offset, size_t blen)
 
    const ssize_t puret = Pages()->VerifyRange(successor_, buff, offset, bread, rg);
    if (puret<0) return puret;
-   if (puret != bread)
-   {
-      return -EDOM;
-   }
    return bread;
 }
 
@@ -369,10 +369,6 @@ ssize_t XrdOssCsiFile::ReadRaw(void *buff, off_t offset, size_t blen)
 
    const ssize_t puret = Pages()->VerifyRange(successor_, buff, offset, bread, rg);
    if (puret<0) return puret;
-   if (puret != bread)
-   {
-      return -EDOM;
-   }
    return bread;
 }
 
@@ -401,10 +397,6 @@ ssize_t XrdOssCsiFile::ReadV(XrdOucIOVec *readV, int n)
       if (readV[i].size == 0) continue;
       ssize_t puret = Pages()->VerifyRange(successor_, readV[i].data, readV[i].offset, readV[i].size, rg);
       if (puret<0) return puret;
-      if (puret != readV[i].size)
-      {
-         return -EDOM;
-      }
    }
    return rret;
 }
@@ -505,10 +497,6 @@ ssize_t XrdOssCsiFile::pgRead(void *buffer, off_t offset, size_t rdlen, uint32_t
 
    ssize_t puret = Pages()->FetchRange(successor_, buffer, offset, bread, csvec, opts, rg);
    if (puret<0) return puret;
-   if (puret != bread)
-   {
-      return -EDOM;
-   }
    return bread;
 }
 
@@ -603,7 +591,7 @@ int XrdOssCsiFile::resyncSizes()
    struct stat sbuff;
    int ret = successor_->Fstat(&sbuff);
    if (ret<0) return ret;
-   Pages()->LockResetSizes(sbuff.st_size);
+   Pages()->LockResetSizes(successor_, sbuff.st_size);
    return 0;
 }
 

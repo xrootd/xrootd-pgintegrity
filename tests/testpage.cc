@@ -1,6 +1,6 @@
 /******************************************************************************/
 /*                                                                            */
-/* (C) Copyright 2020 CERN.                                                   */
+/* (C) Copyright 2021 CERN.                                                   */
 /*                                                                            */
 /* This file is part of the XRootD software suite.                            */
 /*                                                                            */
@@ -475,13 +475,14 @@ TEST_F(osscsi_pageTest,pgwritenonaligned2) {
 TEST_F(osscsi_pageTest,overwritebadcrc) {
   uint8_t testb[] = "abcdefghij";
   uint8_t testb2[] = "abcZefghij";
+  uint8_t testb3[] = "abcYefghij";
   uint8_t rbuf[10];
   uint32_t crc = XrdOucCRC::Calc32C(testb,10,0u);
   ssize_t ret = m_file->pgWrite(testb2, 0, 10, &crc, 0);
   ASSERT_TRUE(ret == 10);
-  ret = m_file->Write(&testb[3], 3, 1);
+  ret = m_file->Write(&testb3[3], 3, 1);
   ASSERT_TRUE(ret == -EDOM);
-  ret = m_file->pgWrite(testb, 0, 9, NULL, 0);
+  ret = m_file->pgWrite(testb3, 0, 9, NULL, 0);
   ASSERT_TRUE(ret == -EDOM);
   ret = m_file->pgWrite(testb, 0, 10, &crc, XrdOssDF::Verify);
   ASSERT_TRUE(ret == 10);

@@ -278,10 +278,6 @@ void XrdOssCsiFileAioJob::DoItRead2()
    {
       aiop_->Result = puret;
    }
-   if (puret != aiop_->Result)
-   {
-      aiop_->Result = -EDOM;
-   }
    aiop_->doneRead();
    nio_->Recycle();
 }

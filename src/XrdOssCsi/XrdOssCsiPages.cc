@@ -32,7 +32,6 @@
 #include "XrdOssCsiTrace.hh"
 #include "XrdOssCsiPages.hh"
 #include "XrdOuc/XrdOucCRC.hh"
-#include "XrdSys/XrdSysPageSize.hh"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -42,18 +41,22 @@
 
 extern XrdOucTrace  OssCsiTrace;
 
-XrdOssCsiPages::XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, bool dpe, const char *tid) :
+XrdOssCsiPages::XrdOssCsiPages(const std::string &fn, std::unique_ptr<XrdOssCsiTagstore> ts, bool wh, bool am, bool dpe, bool dlw, const char *tid) :
         ts_(std::move(ts)),
         writeHoles_(wh),
         allowMissingTags_(am),
         disablePgExtend_(dpe),
         hasMissingTags_(false),
         rdonly_(false),
+        loosewriteConfigured_(!dlw),
+        loosewrite_(false),
         tscond_(0),
         tsforupdate_(false),
         fn_(fn),
         tident_(tid),
-        tident(tident_.c_str())
+        tident(tident_.c_str()),
+        lastpgforloose_(0),
+        checklastpg_(false)
 {
    // empty constructor
 }
@@ -78,6 +81,7 @@ int XrdOssCsiPages::Open(const char *path, off_t dsize, int flags, XrdOucEnv &en
    }
    if (ret<0) return ret;
    if ((flags & O_ACCMODE) == O_RDONLY) rdonly_ = true;
+   loosewrite_ = (dsize==0 && ts_->GetTrackedTagSize()==0) ? false : loosewriteConfigured_;
    return 0;
 }
 
@@ -127,13 +131,16 @@ int XrdOssCsiPages::LockSetTrackedSize(const off_t sz)
    return ts_->SetTrackedSize(sz);
 }
 
-int XrdOssCsiPages::LockResetSizes(const off_t sz)
+int XrdOssCsiPages::LockResetSizes(XrdOssDF *fd, const off_t sz)
 {
    // nothing to do is no tag file
    if (hasMissingTags_) return 0;
 
    XrdSysCondVarHelper lck(&tscond_);
-   return ts_->ResetSizes(sz);
+   const int ret = ts_->ResetSizes(sz);
+   loosewrite_ = loosewriteConfigured_;
+   BasicConsistencyCheck(fd);
+   return ret;
 }
 
 int XrdOssCsiPages::LockTruncateSize(const off_t sz, const bool datatoo)
@@ -205,9 +212,12 @@ int XrdOssCsiPages::UpdateRange(XrdOssDF *const fd, const void *buff, const off_
    return ret;
 }
 
-// Used by Read: At this point the user's buffer has already been read from the file.
+// Used by Read: At this point the user's buffer has already been filled from the file.
+// offset: offset within the file at which the read starts
+// blen  : the length of the read already read into the buffer
+//         (which may be less than what was originally requested)
 //
-ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssCsiRangeGuard &rg)
+int XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen, XrdOssCsiRangeGuard &rg)
 {
    EPNAME("VerifyRange");
 
@@ -225,7 +235,7 @@ ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const 
    const Sizes_t sizes = rg.getTrackinglens();
    const off_t trackinglen = sizes.first;
 
-   if (offset >= trackinglen)
+   if (offset >= trackinglen && blen == 0)
    {
       return 0;
    }
@@ -235,6 +245,12 @@ ssize_t XrdOssCsiPages::VerifyRange(XrdOssDF *const fd, const void *buff, const 
       // if offset is before the tracked len we should not be requested to verify zero bytes:
       // the file may have been truncated
       TRACE(Warn, "Verify request for zero bytes " << fn_ << ", file may be truncated");
+      return -EDOM;
+   }
+
+   if (offset+blen > static_cast<size_t>(trackinglen))
+   {
+      TRACE(Warn, "Verify request for " << (offset+blen-trackinglen) << " bytes from " << fn_ << " beyond tracked lengh");
       return -EDOM;
    }
 
@@ -356,7 +372,7 @@ ssize_t XrdOssCsiPages::apply_sequential_aligned_modify(
 // Used by pgRead or Read (via VerifyRangeAligned) when the read offset is at a page boundary within the file
 // AND the length is a multiple of page size or the read is up to exactly the end of file.
 //
-ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t & /* sizes */, uint32_t *const csvec, const uint64_t opts)
+int XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t & /* sizes */, uint32_t *const csvec, const uint64_t opts)
 {
    EPNAME("FetchRangeAligned");
    uint32_t rdvec[stsize_],vrbuf[stsize_];
@@ -413,7 +429,7 @@ ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t of
                size_t badpg;
                for(badpg=0;badpg<vcnt;++badpg) { if (memcmp(&vrbuf[badpg],&rdbuf[(nread+nverif+badpg)%rdbufsz],4)) break; }
                TRACE(Warn, CRCMismatchError( (nread+nverif+badpg<nfull) ? XrdSys::PageSize : p2_off,
-                                             XrdSys::PageSize*(p1+nread+nverif+badpg),
+                                             (p1+nread+nverif+badpg),
                                              vrbuf[badpg], 
                                              rdbuf[(nread+nverif+badpg)%rdbufsz] ));
                return -EDOM;
@@ -426,10 +442,10 @@ ssize_t XrdOssCsiPages::FetchRangeAligned(const void *const buff, const off_t of
       nread += rcnt;
    }
 
-   return blen;
+   return 0;
 }
 
-ssize_t XrdOssCsiPages::VerifyRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
+int XrdOssCsiPages::VerifyRangeAligned(const void *const buff, const off_t offset, const size_t blen, const Sizes_t &sizes)
 {
    return FetchRangeAligned(buff,offset,blen,sizes,NULL,XrdOssDF::Verify);
 }
@@ -566,7 +582,7 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
          ssize_t rret = XrdOssCsiPages::fullread(fd, b, p_until*XrdSys::PageSize, toread);
          if (rret<0)
          {
-            TRACE(Warn, PageReadError(toread, p_until*XrdSys::PageSize, rret));
+            TRACE(Warn, PageReadError(toread, p_until, rret));
             return rret;
          }
          const uint32_t crc32c = XrdOucCRC::Calc32C(b, toread, 0U);
@@ -579,7 +595,7 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
          }
          if (crc32v != crc32c)
          {
-            TRACE(Warn, CRCMismatchError(toread, XrdSys::PageSize*p_until, crc32c, crc32v));
+            TRACE(Warn, CRCMismatchError(toread, p_until, crc32c, crc32v));
             return -EDOM;
          }
       }
@@ -601,9 +617,12 @@ int XrdOssCsiPages::truncate(XrdOssDF *const fd, const off_t len, XrdOssCsiRange
    return 0;
 }
 
-// used by pgRead: At this point the user's buffer has already been read from the file
+// used by pgRead: At this point the user's buffer has already been filled from the file
+// offset: offset within the file at which the read starts
+// blen  : the length of the read already read into the buffer
+//         (which may be less than what was originally requested)
 //
-ssize_t XrdOssCsiPages::FetchRange(
+int XrdOssCsiPages::FetchRange(
    XrdOssDF *const fd, const void *buff, const off_t offset, const size_t blen,
    uint32_t *csvec, const uint64_t opts, XrdOssCsiRangeGuard &rg)
 {
@@ -627,16 +646,22 @@ ssize_t XrdOssCsiPages::FetchRange(
    const Sizes_t sizes = rg.getTrackinglens();
    const off_t trackinglen = sizes.first;
 
-   if (offset >= trackinglen)
+   if (offset >= trackinglen && blen == 0)
    {
       return 0;
    }
 
    if (blen == 0)
    {
-      // if offset if before the tracked len we should not be requested to verify zero bytes:
+      // if offset is before the tracked len we should not be requested to verify zero bytes:
       // the file may have been truncated
-      TRACE(Warn, "Verify request for zero bytes " << fn_ << ", file may be truncated");
+      TRACE(Warn, "Fetch request for zero bytes " << fn_ << ", file may be truncated");
+      return -EDOM;
+   }
+
+   if (offset+blen > static_cast<size_t>(trackinglen))
+   {
+      TRACE(Warn, "Fetch request for " << (offset+blen-trackinglen) << " bytes from " << fn_ << " beyond tracked lengh");
       return -EDOM;
    }
 
@@ -780,4 +805,133 @@ int XrdOssCsiPages::pgWritePrelockCheck(const void *buffer, off_t offset, size_t
    }
 
    return 0;
+}
+
+//
+// Do some consistency checks and repair in case the datafile length is inconsistent
+// with the length in the tag file. Called on open() and after write failures.
+// Disabled if loosewrite_ off, or file readonly. Sets lastpgforloose_.
+//
+// May be called under tscond_ lock from LockResetSizes, or directly from
+// CsiFile just after open.
+//
+void XrdOssCsiPages::BasicConsistencyCheck(XrdOssDF *fd)
+{
+   EPNAME("BasicConsistencyCheck");
+
+   if (!loosewrite_ || rdonly_) return;
+
+   uint8_t b[XrdSys::PageSize];
+   static const uint8_t bz[XrdSys::PageSize] = {0};
+
+   const off_t tagsize =  ts_->GetTrackedTagSize();
+   const off_t datasize =  ts_->GetTrackedDataSize();
+
+   off_t taglp = 0, datalp = 0;
+   size_t tag_len = 0, data_len = 0;
+
+   if (tagsize>0)
+   {
+      taglp = (tagsize - 1) / XrdSys::PageSize;
+      tag_len = tagsize % XrdSys::PageSize;
+      tag_len = tag_len ? tag_len : XrdSys::PageSize;
+   }
+   if (datasize>0)
+   {
+      datalp = (datasize - 1) / XrdSys::PageSize;
+      data_len = datasize % XrdSys::PageSize;
+      data_len = data_len ? data_len : XrdSys::PageSize;
+   }
+
+   lastpgforloose_ = taglp;
+   checklastpg_ = true;
+
+   if (datasize>0 && taglp > datalp)
+   {
+      ssize_t rlen = XrdOssCsiPages::maxread(fd, b, XrdSys::PageSize * datalp, XrdSys::PageSize);
+      if (rlen<0)
+      {
+         TRACE(Warn, PageReadError(XrdSys::PageSize, datalp, rlen));
+         return;
+      }
+
+      memset(&b[rlen], 0, XrdSys::PageSize-rlen);
+      const uint32_t data_crc = XrdOucCRC::Calc32C(b, data_len, 0u);
+      const uint32_t data_crc_z = XrdOucCRC::Calc32C(b, XrdSys::PageSize, 0u);
+      uint32_t tagv;
+      ssize_t rret = ts_->ReadTags(&tagv, datalp, 1);
+      if (rret<0)
+      {
+         TRACE(Warn, TagsReadError(datalp, 1, rret));
+         return;
+      }
+
+      if (tagv == data_crc_z)
+      {
+         // expected
+      }
+      else if (tagv == data_crc)
+      {
+         // should set tagv to data_crc_z
+         TRACE(Warn, "Resetting tag for page at " << datalp*XrdSys::PageSize << " to zero-extended");
+         const ssize_t wret = ts_->WriteTags(&data_crc_z, datalp, 1);
+         if (wret < 0)
+         {
+            TRACE(Warn, TagsWriteError(datalp, 1, wret));
+            return;
+         }
+      }
+      else
+      {
+         // something else wrong
+         TRACE(Warn, CRCMismatchError(data_len, datalp, data_crc, tagv) << " (ignoring)");
+      }
+   }
+   else if (tagsize>0 && taglp < datalp)
+   {
+      // datafile has more pages than recorded in the tag file:
+      // the tag file should have a crc corresponding to the relevant data fragment that is tracked in the last page.
+      // If it has the crc for a whole page (and there no non-zero content later in the page) reset it.
+      // This is so that a subsequnt UpdateRangeHoleUntilPage can zero-extend the CRC and get a consistent CRC.
+
+      ssize_t rlen = XrdOssCsiPages::maxread(fd, b, XrdSys::PageSize * taglp, XrdSys::PageSize);
+      if (rlen<0)
+      {
+         TRACE(Warn, PageReadError(XrdSys::PageSize, taglp, rlen));
+         return;
+      }
+
+      memset(&b[rlen], 0, XrdSys::PageSize-rlen);
+      const uint32_t tag_crc = XrdOucCRC::Calc32C(b, tag_len, 0u);
+      const uint32_t tag_crc_z = XrdOucCRC::Calc32C(b, XrdSys::PageSize, 0u);
+      const uint32_t dp_ext_is_zero = !memcmp(&b[tag_len], bz, XrdSys::PageSize-tag_len);
+      uint32_t tagv;
+      ssize_t rret = ts_->ReadTags(&tagv, taglp, 1);
+      if (rret<0)
+      {
+         TRACE(Warn, TagsReadError(taglp, 1, rret));
+         return;
+      }
+
+      if (tagv == tag_crc)
+      {
+         // expected
+      }
+      else if (tagv == tag_crc_z && dp_ext_is_zero)
+      {
+         // should set tagv to tag_crc
+         TRACE(Warn, "Resetting tag for page at " << taglp*XrdSys::PageSize << " to not zero-extended");
+         const ssize_t wret = ts_->WriteTags(&tag_crc, taglp, 1);
+         if (wret < 0)
+         {
+            TRACE(Warn, TagsWriteError(taglp, 1, wret));
+            return;
+         }
+      }
+      else
+      {
+         // something else wrong
+         TRACE(Warn, CRCMismatchError(tag_len, taglp, tag_crc, tagv) << " dp_ext_is_zero=" << dp_ext_is_zero << " (ignoring)");
+      }
+   }
 }
