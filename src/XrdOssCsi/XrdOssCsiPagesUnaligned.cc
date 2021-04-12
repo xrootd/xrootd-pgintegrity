@@ -475,7 +475,7 @@ int XrdOssCsiPages::StoreRangeUnaligned_postblock(XrdOssDF *const fd, const void
    // check(s) to see if remaining data was valid
 
    // usual check; unmodified block is consistent with stored crc
-   // for loose write we allow case were the new data have already been written to the datafile
+   // for loose write we allow case were the new crc has already been stored in the tagfile
 
    // this may be an implicit verification (e.g. pgWrite may return EDOM without Verify requested)
    // however, it's not clear if there is a meaningful way to crc a mismatching page during a partial overwrite

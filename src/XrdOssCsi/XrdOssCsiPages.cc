@@ -510,7 +510,9 @@ void XrdOssCsiPages::LockTrackinglen(XrdOssCsiRangeGuard &rg, const off_t offset
       Sizes_t sizes;
       (void)TrackedSizesGet(sizes, !rdonly);
 
-      // tag tracking size: always less than or equal to actual tracked size
+      // tag tracking data filesize, as recorded in the tagfile and for which the tagfile
+      // should be approprately sized, is sizes.first: usually the same as the in
+      // memory "actual" data filesize (sizes.second), but may differ after crashes or write failure.
       const off_t trackinglen = sizes.first;
 
       const off_t p1 = (offset>trackinglen ? trackinglen : offset) / XrdSys::PageSize;

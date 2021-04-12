@@ -9,14 +9,15 @@ and pgRead() can be used to directly write or read the values.
 Usage:
 ------
 
-e.g. with an Xcache, using 'tags' as the space name for the files
-containing the CRC32C values:
+With Xcache: XrdOssCsi will be loaded when cache checksum integrity checking is enabled.
+The plugin options 'nofill' and 'space=<cache metadata space name>' are passed
+automatically. (See below for information about those options)
 
 ```
-pfc.osslib ++ /usr/lib64/libXrdOssCsi.so nofill space=tags
+pfc.cschk cache
 ```
 
-e.g. on a stanalone server
+On a stanalone server:
 
 ```
 ofs.osslib ++ /usr/lib64/libXrdOssCsi.so
