@@ -1,6 +1,8 @@
 XrdOssCsi
 =========
 
+*The source for XrdOssCsi has been added to the main xrootd repository.*
+
 XrdOssCsi is a stacked Oss plugin that adds the filesystem checksum (XRDOSS_HASFSCS)
 feature to an Oss by storing per-page CRC32C values as a separate file.
 Write() and Read() calls update or check against the stored CRC32C values. pgWrite()
@@ -10,7 +12,7 @@ Usage:
 ------
 
 With Xcache: XrdOssCsi will be loaded when cache checksum integrity checking is enabled.
-The plugin options 'nofill' and 'space=<cache metadata space name>' are passed
+The plugin options 'nofill' and 'space=[cache metadata space name]' are passed
 automatically. (See below for information about those options)
 
 ```

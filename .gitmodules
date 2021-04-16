@@ -1,0 +1,3 @@
+[submodule "submodules/xrootd"]
+	path = submodules/xrootd
+	url = https://github.com/xrootd/xrootd

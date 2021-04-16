@@ -1,6 +1,11 @@
 include_directories( ${XROOTD_INCLUDES} )
 link_directories( ${XROOTD_LIB_DIR} )
 
+#
+# Source location
+#
+set(CSISRC ../submodules/xrootd/src/XrdOssCsi)
+
 #-------------------------------------------------------------------------------
 # Modules
 #-------------------------------------------------------------------------------
@@ -16,18 +21,18 @@ set( LIB_XRD_OSSCSI  XrdOssCsi-${PLUGIN_VERSION} )
 add_library(
   ${LIB_XRD_OSSCSI}
   MODULE
-  XrdOssCsi/XrdOssCsi.cc                      XrdOssCsi/XrdOssCsi.hh
-  XrdOssCsi/XrdOssCsiFile.cc
-  XrdOssCsi/XrdOssCsiFileAio.cc               XrdOssCsi/XrdOssCsiFileAio.hh
-  XrdOssCsi/XrdOssCsiPages.cc                 XrdOssCsi/XrdOssCsiPages.hh
-  XrdOssCsi/XrdOssCsiPagesUnaligned.cc
-  XrdOssCsi/XrdOssCsiTagstoreFile.cc          XrdOssCsi/XrdOssCsiTagstoreFile.hh
-  XrdOssCsi/XrdOssCsiRanges.cc                XrdOssCsi/XrdOssCsiRanges.hh
-  XrdOssCsi/XrdOssCsiConfig.cc                XrdOssCsi/XrdOssCsiConfig.hh
-  XrdOssCsi/XrdOssCsiCrcUtils.cc              XrdOssCsi/XrdOssCsiCrcUtils.hh
-                                              XrdOssCsi/XrdOssCsiTagstore.hh
-                                              XrdOssCsi/XrdOssHandler.hh
-                                              XrdOssCsi/XrdOssCsiTrace.hh
+  ${CSISRC}/XrdOssCsi.cc                      ${CSISRC}/XrdOssCsi.hh
+  ${CSISRC}/XrdOssCsiFile.cc
+  ${CSISRC}/XrdOssCsiFileAio.cc               ${CSISRC}/XrdOssCsiFileAio.hh
+  ${CSISRC}/XrdOssCsiPages.cc                 ${CSISRC}/XrdOssCsiPages.hh
+  ${CSISRC}/XrdOssCsiPagesUnaligned.cc
+  ${CSISRC}/XrdOssCsiTagstoreFile.cc          ${CSISRC}/XrdOssCsiTagstoreFile.hh
+  ${CSISRC}/XrdOssCsiRanges.cc                ${CSISRC}/XrdOssCsiRanges.hh
+  ${CSISRC}/XrdOssCsiConfig.cc                ${CSISRC}/XrdOssCsiConfig.hh
+  ${CSISRC}/XrdOssCsiCrcUtils.cc              ${CSISRC}/XrdOssCsiCrcUtils.hh
+                                              ${CSISRC}/XrdOssCsiTagstore.hh
+                                              ${CSISRC}/XrdOssHandler.hh
+                                              ${CSISRC}/XrdOssCsiTrace.hh
   )
 
 target_link_libraries(
